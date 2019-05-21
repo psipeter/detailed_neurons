@@ -1,0 +1,256 @@
+/* 4-compartment model of a deep layer PFC pyramidal cell */
+/* from Durstewitz et al. (2000), J.Neurophysiol. 83: 1733-50 */
+
+nrn_load_dll("./x86_64/.libs/libnrnmech.so")
+
+
+begintemplate Durstewitz
+
+	public soma, basal, prox, dist
+
+	create soma
+	create basal
+	create prox
+	create dist
+
+	proc init(){
+
+		cao0_ca_ion = 2  /* mM */
+		cai0_ca_ion = 50e-6   /* mM */
+		ko0_k_ion = 3.82  /* mM */
+		ki0_k_ion = 140   /* mM */
+		celcius   = 23
+
+		soma {
+
+			nseg=1
+			L=86.3
+			diam=6.14
+			insert Naf
+			gnafbar_Naf = 0.086
+			insert Nap
+			gnapbar_Nap = 0.0022
+			insert Hva
+			ghvabar_Hva = 0.00034
+			insert kdr
+			gkdrbar_kdr = 0.0338
+			insert IKs
+			gKsbar_IKs = 0.00014
+			insert iC
+			gkcbar_iC = 0.0022
+			insert cadyn
+			CAF_cadyn=385.948e-9
+			tca_cadyn =250
+			insert kdyn
+			insert pas
+		    e_pas = -70
+			Ra = 150
+			g_pas = 3.33e-5
+			cm = 1.2
+		}
+
+		basal {
+			nseg=1
+			L=150.0
+			diam=16.0
+			insert Naf
+			gnafbar_Naf = 0.028
+			insert Nap
+			gnapbar_Nap = 0.001
+			insert Hva
+			ghvabar_Hva = 0.0007
+			insert kdr
+			gkdrbar_kdr = 0.0092
+			insert IKs
+			gKsbar_IKs = 0.00024
+			insert iC
+			gkcbar_iC = 0.0038
+			insert cadyn
+			CAF_cadyn=964.87e-9
+			tca_cadyn =120
+			insert kdyn
+			insert pas
+		    cm = 2.3
+			g_pas = 6.39e-5
+		    e_pas = -70
+			Ra = 150
+		}
+
+		prox {
+			nseg=1
+			L=400.0
+			diam=2.6
+			insert Naf
+			gnafbar_Naf = 0.028
+			insert Nap
+			gnapbar_Nap = 0.001
+			insert Hva
+			ghvabar_Hva = 0.0007
+			insert kdr
+			gkdrbar_kdr = 0.0092
+			insert IKs
+			gKsbar_IKs = 0.00024
+			insert iC
+			gkcbar_iC = 0.0038
+			insert cadyn
+			CAF_cadyn=964.87e-9
+			tca_cadyn =120
+			insert kdyn
+			insert pas
+		    cm = 2.3
+			g_pas = 6.39e-5
+		    e_pas = -70
+			Ra = 150
+		}
+
+		dist {
+			nseg=1
+			L=400
+			diam=2.6
+			insert Naf
+			gnafbar_Naf = 0.028
+			insert Hva
+			ghvabar_Hva = 0.00034
+			insert kdr
+			gkdrbar_kdr = 0.0092
+			insert IKs
+			gKsbar_IKs = 0.00024
+			insert iC
+			gkcbar_iC = 0.0022
+			insert cadyn
+			CAF_cadyn=964.87e-9
+			tca_cadyn =80
+			insert kdyn
+			insert pas
+	      	cm = 2.3
+			g_pas = 6.39e-5
+	        e_pas = -70
+			Ra = 150
+		}
+
+		connect basal(0), soma(0)
+		connect prox(0), soma(1)
+		connect dist(0), prox(1)
+	}
+
+	proc init_DA(){
+
+		cao0_ca_ion = 2  /* mM */
+		cai0_ca_ion = 50e-6   /* mM */
+		ko0_k_ion = 3.82  /* mM */
+		ki0_k_ion = 140   /* mM */
+		celcius   = 23
+
+		soma {
+
+			nseg=1
+			L=86.3
+			diam=6.14
+			insert Naf
+			gnafbar_Naf = 0.086
+			insert Nap
+			gnapbar_Nap = 0.0022
+			insert Hva
+			ghvabar_Hva = 0.000272
+			insert kdr
+			gkdrbar_kdr = 0.0338
+			insert IKs
+			gKsbar_IKs = 0.00007
+			insert iC
+			gkcbar_iC = 0.0022
+			insert cadyn
+			CAF_cadyn=385.948e-9
+			tca_cadyn =250
+			insert kdyn
+			insert pas
+		    e_pas = -70
+			Ra = 150
+			g_pas = 3.33e-5
+			cm = 1.2
+		}
+
+		basal {
+			nseg=1
+			L=150.0
+			diam=16.0
+			insert Naf
+			gnafbar_Naf = 0.028
+			insert Nap
+			gnapbar_Nap = 0.001
+			insert Hva
+			ghvabar_Hva = 0.00056
+			insert kdr
+			gkdrbar_kdr = 0.0092
+			insert IKs
+			gKsbar_IKs = 0.00012
+			insert iC
+			gkcbar_iC = 0.0038
+			insert cadyn
+			CAF_cadyn=964.87e-9
+			tca_cadyn =120
+			insert kdyn
+			insert pas
+		    cm = 2.3
+			g_pas = 6.39e-5
+		    e_pas = -70
+			Ra = 150
+		}
+
+		prox {
+			nseg=1
+			L=400.0
+			diam=2.6
+			insert Naf
+			gnafbar_Naf = 0.028
+			insert Nap_DA
+			gnapbar_Nap = 0.001
+			insert Hva
+			ghvabar_Hva = 0.00056
+			insert kdr
+			gkdrbar_kdr = 0.0092
+			insert IKs
+			gKsbar_IKs = 0.00012
+			insert iC
+			gkcbar_iC = 0.0038
+			insert cadyn
+			CAF_cadyn=964.87e-9
+			tca_cadyn =120
+			insert kdyn
+			insert pas
+		    cm = 2.3
+			g_pas = 6.39e-5
+		    e_pas = -70
+			Ra = 150
+		}
+
+		dist {
+			nseg=1
+			L=400
+			diam=2.6
+			insert Naf
+			gnafbar_Naf = 0.028
+			insert Hva
+			ghvabar_Hva = 0.00017
+			insert kdr
+			gkdrbar_kdr = 0.0092
+			insert IKs
+			gKsbar_IKs = 0.00012
+			insert iC
+			gkcbar_iC = 0.0022
+			insert cadyn
+			CAF_cadyn=964.87e-9
+			tca_cadyn =80
+			insert kdyn
+			insert pas
+	      	cm = 2.3
+			g_pas = 6.39e-5
+	        e_pas = -70
+			Ra = 150
+		}
+
+		connect basal(0), soma(0)
+		connect prox(0), soma(1)
+		connect dist(0), prox(1)
+	}
+
+endtemplate Durstewitz

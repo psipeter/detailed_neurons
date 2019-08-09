@@ -27,11 +27,41 @@ import os
 import warnings
 
 import neuron
-neuron.h.load_file('/home/pduggins/detailed_neurons/detailed_neurons/NEURON/durstewitz/durstewitz.hoc')
+neuron.h.load_file('NEURON/durstewitz.hoc')
 neuron.h.load_file('stdrun.hoc')
 
 
-__all__ = ['AdaptiveLIFT', 'WilsonEuler', 'DurstewitzNeuron', 'SimNeuronNeurons', 'TransmitSpikes', 'BiasSpikes', 'TransmitSignal', 'reset_neuron']
+__all__ = ['LIFNorm', 'AdaptiveLIFT', 'WilsonEuler', 'DurstewitzNeuron',
+    'SimNeuronNeurons', 'TransmitSpikes', 'BiasSpikes', 'TransmitSignal', 'reset_neuron']
+
+
+class LIFNorm(LIF):
+    probeable = ("spikes", "voltage", "refractory_time")
+
+    min_voltage = NumberParam("min_voltage", high=0)
+
+    max_x = nengo.params.NumberParam('max_x')
+
+    def __init__(self, max_x=1.0, tau_rc=0.02, tau_ref=0.002, amplitude=1):
+        super().__init__(tau_rc=tau_rc, tau_ref=tau_ref, amplitude=amplitude)
+        self.max_x = max_x
+
+    def gain_bias(self, max_rates, intercepts):
+        """Analytically determine gain, bias."""
+        max_rates = np.array(max_rates, dtype=float, copy=False, ndmin=1)
+        intercepts = np.array(intercepts, dtype=float, copy=False, ndmin=1)
+
+        inv_tau_ref = 1. / self.tau_ref if self.tau_ref > 0 else np.inf
+        if np.any(max_rates > inv_tau_ref):
+            raise ValidationError("Max rates must be below the inverse "
+                                  "refractory period (%0.3f)" % inv_tau_ref,
+                                  attr='max_rates', obj=self)
+
+        x = -1 / np.expm1((self.tau_ref - 1 / max_rates) / self.tau_rc)
+        normalizer = 0.5 * self.max_x + 0.5  # == 1 when max_x == 1, 0.5*max_x when max_x >> 1
+        gain = (x - 1) * normalizer / (self.max_x - intercepts)
+        bias = 1 - gain * intercepts
+        return gain, bias
 
 
 class AdaptiveLIFT(LIFRate):
@@ -211,17 +241,18 @@ class WilsonEuler(NeuronType):
             dt=0.00005, settle_time=0.1, sim_time=1.0)
 
 
-    def step_math(self, dt, J, spiked, V, R, H, AP):
+    def step_math(self, dt, J, spiked, V, R, H, AP, ddt=0.000025):
         if np.abs(J).any() >= 2.0:
             warnings.warn("input current exceeds failure point; clipping")
             J = J.clip(max=self._maxJ)
-        dV = -(17.81 + 47.58*V + 33.80*np.square(V))*(V - 0.48) - 26*R*(V + 0.95) - 13*H*(V + 0.95) + J
-        dR = -R + 1.29*V + 0.79 + 3.30*np.square(V + 0.38)
-        dH = -H + 11*(V + 0.754)*(V + 0.69)
+        for step in range(int(dt/ddt)):
+            dV = -(17.81 + 47.58*V + 33.80*np.square(V))*(V - 0.48) - 26*R*(V + 0.95) - 13*H*(V + 0.95) + J
+            dR = -R + 1.29*V + 0.79 + 3.30*np.square(V + 0.38)
+            dH = -H + 11*(V + 0.754)*(V + 0.69)
         
-        V[:] = (V + dV * dt/self.tau_V).clip(-0.9, 0.3)
-        R[:] = (R + dR * dt/self.tau_R)  # .clip(0.18, 0.42)
-        H[:] = (H + dH * dt/self.tau_H)  # .clip(0, 0.23)
+            V[:] = (V + dV * ddt/self.tau_V).clip(-0.9, 0.3)
+            R[:] = (R + dR * ddt/self.tau_R)  # .clip(0.18, 0.42)
+            H[:] = (H + dH * ddt/self.tau_H)  # .clip(0, 0.23)
         spiked[:] = (V > self.threshold) & (~AP)
         spiked /= dt
         AP[:] = V > self.threshold
@@ -315,10 +346,6 @@ class SimNeuronNeurons(Operator):
         self.spk_recs = []
         self.spk_before = [[] for n in range(n_neurons)]
         for n in range(n_neurons):
-            if self.neuron_type.DA:
-                self.neurons[n].init_DA()
-            else:
-                self.neurons[n].init()
             self.v_recs.append(neuron.h.Vector())
             self.v_recs[n].record(self.neurons[n].soma(0.5)._ref_v, dt*1000)
             self.spk_vecs.append(neuron.h.Vector())
@@ -417,16 +444,15 @@ class BiasSpikes(Operator):
         self.syns = []
         self.ncs = []
         for n in range(len(self.neurons)):
-            for loc in [neurons[n].basal(0.5), neurons[n].prox(0.5), neurons[n].dist(0.5)]:
-                self.stims.append(neuron.h.NetStim())
-                self.syns.append(neuron.h.ExpSyn(loc))
-                self.syns[-1].tau = self.tau * 1000  # time constant of synapse on spiking bias input
-                self.syns[-1].e = 0.0 if self.bias[n] > 0 else -70.0
-                self.ncs.append(neuron.h.NetCon(self.stims[-1], self.syns[-1], 0, 0, np.abs(self.bias[n])))
-                self.ncs[-1].pre().start = 0
-                self.ncs[-1].pre().number = 1e10
-                self.ncs[-1].pre().interval = 1
-                self.ncs[-1].pre().noise = 0  # 0 for regular spikes at rate, 1 for poisson spikes at rate
+            self.stims.append(neuron.h.NetStim())
+            self.syns.append(neuron.h.ExpSyn(neurons[n].soma(0.5)))
+            self.syns[-1].tau = self.tau * 1000  # time constant of synapse on spiking bias input
+            self.syns[-1].e = 0.0 if self.bias[n] > 0 else -70.0
+            self.ncs.append(neuron.h.NetCon(self.stims[-1], self.syns[-1], 0, 0, np.abs(self.bias[n])))
+            self.ncs[-1].pre().start = 0
+            self.ncs[-1].pre().number = 1e10
+            self.ncs[-1].pre().interval = 1
+            self.ncs[-1].pre().noise = 0  # 0 for regular spikes at rate, 1 for poisson spikes at rate
 #                 self.ncs[-1].active(0)  # turn off until build finishes
     def make_step(self, signals, dt, rng):
         def step():
@@ -490,16 +516,13 @@ def build_connection(model, conn):
         # load previously optimized gain/bias
         encoders = model.params[post_obj].encoders
         dim = post_obj.dimensions
-        if hasattr(conn, 'gain') and conn.gain is not 0:
-            gain = np.array(conn.gain)
-            bias = np.array(conn.bias)
-        else:
-            gain = 1e-2 * np.ones((post_obj.n_neurons, post_obj.dimensions))
-            bias = np.zeros((post_obj.n_neurons))
-        scaled_enc = encoders * gain
-            
+
         # connect spiking poisson input to conn.post
         if not hasattr(conn, 'biasspike'):
+            if hasattr(conn, 'bias'):
+                bias = np.array(conn.bias).ravel()
+            else:
+                bias = np.zeros((post_obj.n_neurons))
             biasspike = BiasSpikes(model.params[post_obj.neurons], bias)
             model.add_op(biasspike)
             with warnings.catch_warnings():
@@ -510,6 +533,10 @@ def build_connection(model, conn):
         assert isinstance(conn.synapse, LinearSystem), "only nengolib synapses supported"
         assert len(conn.synapse.num) == 0, "only poles supported"
         assert 0 < len(conn.synapse.den) <= 2, "only exponential and double exponential synapses supported"
+        if hasattr(conn, 'gain'):
+            gain = np.array(conn.gain)
+        else:
+            gain = 1e-2 * np.ones((post_obj.n_neurons, 1))
         taus = -1.0/np.array(conn.synapse.poles)
         tf = 10.0
         if len(taus) == 1:
@@ -518,6 +545,7 @@ def build_connection(model, conn):
             gain /= np.max(taus)/(np.max(taus)-np.min(taus)) * \
                 (np.min(taus) + np.max(taus) - \
                  np.min(taus)*np.exp(-tf/np.min(taus)) - np.max(taus)*np.exp(-tf/np.max(taus)))
+        scaled_enc = encoders * gain
         
         if isinstance(conn.pre_obj, nengo.Ensemble) and 'spikes' in conn.pre_obj.neuron_type.probeable:
             # connect spikes from conn.pre to conn.post with computed weight matrix

@@ -7,39 +7,36 @@ Includes methods for training encoders, decoders, and filters in nengo networks 
 Test the performance of these methods on several dynamical systems, including: communication channel, f(x)=x^2, integrator, 2d oscillator, Lorenz attractor
 
 
-Install
+Clone the repository
 =======
-
+	
 	git clone https://github.com/psipeter/detailed_neurons.git
 
 	cd detailed_neurons
     
-	pip install pipenv
+Install virtual environment
+=======
 
-    pipenv --three shell
+	pip3 install pipenv
+
+    pipenv shell
+
+
+Install NEURON
+=======
     
-    wget http://www.neuron.yale.edu/ftp/neuron/versions/v7.6/nrn-7.6.tar.gz
-    
-    nrn-7.6.tar.gz
-    
-    cd nrn-7.6
+	(follow instructions at https://neuron.yale.edu/neuron/download/compile_linux)
 
-    ./configure --with-nrnpython --with-pyexe=python3 --without-iv
+	cd detailed_neurons/detailed_neurons/NEURON
 
-    make
+	module load mpi
 
-    sudo make install
+	/pwd/x86_64/bin/nrnivmodl
 
-    cd src/nrnpython
 
-    python3 setup.py install
+Install detailed_neurons
+=======
 
-    cd NEURON/durstewitz/
-
-    /usr/local/nrn/x86_64/bin/nrnivmodl
-    
-    cd ../../..
-    
-    (edit path in neuron_models.py and train.py to allow loading of durstewitz.hoc)
+	cd ../..
     
 	pipenv --three install '-e .'

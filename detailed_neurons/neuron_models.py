@@ -238,7 +238,7 @@ class WilsonEuler(NeuronType):
 
         return settled_firingrate(
             self.step_math, J, [voltage, recovery, conductance, AP],
-            dt=0.00005, settle_time=0.1, sim_time=1.0)
+            dt=0.000025, settle_time=0.1, sim_time=1.0)
 
 
     def step_math(self, dt, J, spiked, V, R, H, AP, ddt=0.000025):

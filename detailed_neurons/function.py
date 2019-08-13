@@ -21,14 +21,17 @@ sns.set(context='poster', style='white')
 
 
 def go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstewitz,
-        n_neurons=100, t=10, m=Uniform(10, 20), i=Uniform(-1, 1), seed=1, dt=0.001, f=Lowpass(0.1),
-        stim_func=lambda t: np.sin(t), g=None, b=None, g2=None, b2=None, norm_val=1.0, mirror=True):
+        n_neurons=100, t=10, seed=1, dt=0.001, f=Lowpass(0.1), m=Uniform(10, 20), i=Uniform(-1, 1),
+        stim_func=lambda t: np.sin(t), g=None, b=None, g2=None, b2=None, norm_val=1.0, mirror=False):
 
     solver_lif = NoSolver(d_lif)
     solver_alif = NoSolver(d_alif)
     solver_wilson = NoSolver(d_wilson)
     solver_durstewitz = NoSolver(d_durstewitz)
-    norm = norms(t, dt, stim_func, f=f, value=norm_val)
+    t_norm = t/2 if mirror else t
+    norm = norms(t_norm, dt, stim_func, f=f, value=norm_val)
+    # e2 = nengo.dists.Choice([[-1], [1]]).sample(n_neurons, rng=np.random.RandomState(seed=seed))
+    # i2 = Uniform(0.2, 0.8).sample(n_neurons, rng=np.random.RandomState(seed=seed)) * e2.ravel()
  
     with nengo.Network(seed=seed) as model:
 
@@ -42,18 +45,18 @@ def go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_dur
         nengo.Connection(u_raw, u, synapse=None, transform=norm)
         
         # Ensembles
-        pre = nengo.Ensemble(100, 1, radius=norm, max_rates=m, intercepts=i, seed=seed, label='pre')
+        pre = nengo.Ensemble(100, 1, max_rates=m, intercepts=i, seed=seed, label='pre')
         nef = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed, label='nef')
         lif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=LIFNorm(max_x=norm_val), seed=seed, label='lif')
         alif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed, label='alif')
         wilson = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=WilsonEuler(), seed=seed, label='wilson')
-        durstewitz = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed, label='durstewitz')
+        durstewitz = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=DurstewitzNeuron(), seed=seed, label='durstewitz')
         tar = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
-        nef2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed, label='nef2')
-        lif2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=LIFNorm(max_x=norm_val), seed=seed, label='lif2')
-        alif2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed, label='alif2')
-        wilson2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=WilsonEuler(), seed=seed, label='wilson2')
-        durstewitz2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed, label='durstewitz2')
+        nef2 = nengo.Ensemble(n_neurons, 1, max_rates=m, neuron_type=nengo.LIF(), seed=seed, label='nef2')
+        lif2 = nengo.Ensemble(n_neurons, 1, max_rates=m, neuron_type=LIFNorm(max_x=norm_val), seed=seed, label='lif2')
+        alif2 = nengo.Ensemble(n_neurons, 1, max_rates=m, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed, label='alif2')
+        wilson2 = nengo.Ensemble(n_neurons, 1, max_rates=m, neuron_type=WilsonEuler(), seed=seed, label='wilson2')
+        durstewitz2 = nengo.Ensemble(n_neurons, 1, max_rates=m, neuron_type=DurstewitzNeuron(), seed=seed, label='durstewitz2')
         tar2 = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
 
         # Connections
@@ -73,6 +76,7 @@ def go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_dur
 
         # Probes
         p_u = nengo.Probe(u, synapse=None)
+        p_pre = nengo.Probe(pre, synapse=f)
         p_tar = nengo.Probe(tar, synapse=None)
         p_nef = nengo.Probe(nef, synapse=f)
         p_nef_spike = nengo.Probe(nef.neurons, synapse=None)
@@ -103,6 +107,7 @@ def go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_dur
     return dict(
         times=sim.trange(),
         u=sim.data[p_u],
+        pre=sim.data[p_pre],
         tar=sim.data[p_tar],
         tar2=sim.data[p_tar2],
         nef=sim.data[p_nef],
@@ -130,6 +135,8 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
     b2 = np.zeros((n_neurons, 1))
     f_lif, f_alif, f_wilson, f_durstewitz = f, f, f, f
     d_lif, d_alif, d_wilson, d_durstewitz = np.zeros((n_neurons, 1)), np.zeros((n_neurons, 1)), np.zeros((n_neurons, 1)), np.zeros((n_neurons, 1))
+    # omega = np.random.RandomState(seed=gb).uniform(0, 2*np.pi)
+    stim_func = lambda t: np.sin(t)
 
     if load_gb:
         load = np.load(load_gb)
@@ -140,15 +147,11 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
     else:
         for gb in range(gb_evals):
             print("gain1/bias1 evaluation #%s"%gb)
-            # stim_func = nengo.processes.WhiteSignal(period=t/2, high=1, rms=0.5, seed=gb)
-            omega = np.random.RandomState(seed=gb).uniform(0, 2*np.pi)
-            stim_func = lambda t: np.sin(t + omega)
             data = go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstewitz,
-                n_neurons=n_neurons, t=t_train, f=f, dt=dt, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func,
-                mirror=False, norm_val=1.2)
+                n_neurons=n_neurons, t=t_train, f=f, dt=dt, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, norm_val=1.0)
             g, b, losses = gb_opt(data['durstewitz'], data['lif'], data['tar'], data['enc'], g, b,
             	dt=dt, name="plots/tuning/function_eval%s_"%gb)
-        np.savez('data/gb_function.npz', g=g, b=b, g2=g2, b2=b2)
+        np.savez('data/gb_function.npz', g=g, b=b, g2=g, b2=b)
 
     if load_fd:
         load = np.load(load_fd)
@@ -169,13 +172,11 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
         f_wilson_fx = Lowpass(load['tau_wilson_fx'])[0]
         f_durstewitz_fx = Lowpass(load['tau_durstewitz_fx'])[0]
     else:
-        if load_gb:
+        if load_gb or gb_evals == 0:
             print('gathering filter/decoder training data')
-            stim_func = nengo.processes.WhiteSignal(period=t_train/2, high=1, rms=1, seed=0)
-            # stim_func = lambda t: np.sin(t)
             data = go(fx, d_lif, d_alif, d_wilson, d_durstewitz,
                 f_lif, f_alif, f_wilson, f_durstewitz,
-                n_neurons=n_neurons, t=t_train, f=f, dt=dt, stim_func=stim_func, mirror=True, norm_val=1.0,
+                n_neurons=n_neurons, t=t_train, f=f, dt=dt, stim_func=stim_func, norm_val=1.0,
                 g=g, b=b, g2=g2, b2=b2)            
         if df_evals:
             print('optimizing filters/decoders for readout')
@@ -304,14 +305,10 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
         b2 = b
         for gb in range(gb_evals2):
             print("gain2/bias2 evaluation #%s"%gb)
-            # stim_func = nengo.processes.WhiteSignal(period=t/2, high=1, rms=0.5, seed=gb)
-            omega = np.random.RandomState(seed=gb).uniform(0, 2*np.pi)
-            stim_func = lambda t: np.sin(t + omega)
             data = go(fx, d_lif_fx, d_alif_fx, d_wilson_fx, d_durstewitz_fx, f_lif_fx, f_alif_fx, f_wilson_fx, f_durstewitz_fx,
-                n_neurons=n_neurons, t=t_train, f=f, dt=dt, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func,
-                mirror=False, norm_val=1.2)
-            g2, b2, losses = gb_opt(data['durstewitz2'], data['lif2'], data['tar2'], data['enc'], g, b,
-            	xmin=0.0, xmax=1.2, dt=dt, name="plots/tuning/function2_eval%s_"%gb)
+                n_neurons=n_neurons, t=t_train, f=f, dt=dt, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, norm_val=1.0)
+            g2, b2, losses = gb_opt(data['durstewitz2'], data['lif2'], data['tar2'], data['enc'], g2, b2,
+            	xmin=0, xmax=1.0, dt=dt, name="plots/tuning/function2_eval%s_"%gb)
         np.savez('data/gb_function2.npz', g=g, b=b, g2=g2, b2=b2)
 
     # d_lif2_out = d_lif_out
@@ -323,7 +320,7 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
     # f_wilson2_out = f_wilson_out
     # f_durstewitz2_out = f_durstewitz_out
     if load_fd2:
-        load = np.load(load_fd)
+        load = np.load(load_fd2)
         d_lif2_out = load['d_lif2_out']
         d_alif2_out = load['d_alif2_out']
         d_wilson2_out = load['d_wilson2_out']
@@ -333,13 +330,11 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
         f_wilson2_out = Lowpass(load['tau_wilson2_out'])[0]
         f_durstewitz2_out = Lowpass(load['tau_durstewitz2_out'])[0]
     else:
-        if load_gb2:
+        if load_gb2 or gb_evals2 == 0:
             print('gathering filter/decoder training data2')
-            stim_func = nengo.processes.WhiteSignal(period=t_train, high=1, rms=1, seed=0)
-            # stim_func = lambda t: np.sin(t)
             data = go(fx, d_lif_fx, d_alif_fx, d_wilson_fx, d_durstewitz_fx,
                 f_lif_fx, f_alif_fx, f_wilson_fx, f_durstewitz_fx,
-                n_neurons=n_neurons, t=t_train, f=f, dt=dt, stim_func=stim_func, mirror=False, norm_val=1.0,
+                n_neurons=n_neurons, t=t_train, f=f, dt=dt, stim_func=stim_func, norm_val=1.0,
                 g=g, b=b, g2=g2, b2=b2)            
         if df_evals:
             print('optimizing filters/decoders for readout2')
@@ -377,15 +372,14 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
         ax.legend(loc='upper right')
         plt.tight_layout()
         plt.savefig("plots/function_filters_readout2.png")
-
             
         a_nef2_out = f.filt(data['nef2_spike'], dt=dt)
-        a_lif2_out = f_lif_out.filt(data['lif2'], dt=dt)
-        a_alif2_out = f_alif_out.filt(data['alif2'], dt=dt)
-        a_wilson2_out = f_wilson_out.filt(data['wilson2'], dt=dt)
-        a_durstewitz2_out = f_durstewitz_out.filt(data['durstewitz2'], dt=dt)
+        a_lif2_out = f_lif2_out.filt(data['lif2'], dt=dt)
+        a_alif2_out = f_alif2_out.filt(data['alif2'], dt=dt)
+        a_wilson2_out = f_wilson2_out.filt(data['wilson2'], dt=dt)
+        a_durstewitz2_out = f_durstewitz2_out.filt(data['durstewitz2'], dt=dt)
         target = f.filt(data['tar2'], dt=dt)
-        xhat_nef = data['nef2']
+        xhat_nef = f.filt(data['nef2'], dt=dt)
         xhat_lif = np.dot(a_lif2_out, d_lif2_out)
         xhat_alif = np.dot(a_alif2_out, d_alif2_out)
         xhat_wilson = np.dot(a_wilson2_out, d_wilson2_out)
@@ -412,11 +406,11 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
     nrmses = np.zeros((5, n_tests))
     for test in range(n_tests):
         print('test %s' %test)
-        stim_func = nengo.processes.WhiteSignal(period=t, high=1, rms=1, seed=100+test)
+        stim_func = nengo.processes.WhiteSignal(period=t/2, high=1, rms=1, seed=100+test)
         data = go(fx, d_lif_fx, d_alif_fx, d_wilson_fx, d_durstewitz_fx,
             f_lif_fx, f_alif_fx, f_wilson_fx, f_durstewitz_fx,
             n_neurons=n_neurons, t=t, f=f, dt=dt, stim_func=stim_func,
-            g=g, b=b, g2=g2, b2=b2, mirror=False)
+            g=g, b=b, g2=g2, b2=b2, mirror=True)
 
         a_nef = f.filt(data['nef_spike'], dt=dt)
         a_lif = f_lif_out.filt(data['lif'], dt=dt)
@@ -432,7 +426,9 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
 
         fig, ax = plt.subplots(figsize=((12, 8)))
         ax.plot(data['times'], target, linestyle="--", label='target')
-        ax.plot(data['times'], xhat_nef, label='LIF, nrmse=%.3f, nonzero %s'
+        # ax.plot(data['times'], data['u'], label='u')
+        # ax.plot(data['times'], data['pre'], label='pre')
+        ax.plot(data['times'], xhat_nef, label='NEF, nrmse=%.3f, nonzero %s'
             %(nrmse(xhat_nef, target=target), np.count_nonzero(np.sum(a_nef, axis=0))))
         ax.plot(data['times'], xhat_lif, label='LIF, nrmse=%.3f, nonzero %s'
             %(nrmse(xhat_lif, target=target), np.count_nonzero(np.sum(a_lif, axis=0))))
@@ -497,13 +493,6 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
     np.savez('data/nrmses_function.npz', nrmses=nrmses, means=means, CIs=CIs)
 
 
-# def fx(x): return x
-# run(fx, n_neurons=30, n_tests=3, gb_evals=0, gb_evals2=0, df_evals=200, dt=0.001, load_gb="data/gb_function.npz")
-
 def fx(x): return np.square(x)
-run(fx, n_neurons=100, t_train=30, n_tests=3, gb_evals=0, gb_evals2=0, df_evals=100, order=1, dt=0.001,
-    load_gb="data/gb_function.npz", load_gb2="data/gb_function.npz")
-
-# def fx(x): return np.square(x)
-# run(fx, n_neurons=100, n_tests=3, gb_evals=0, gb_evals2=1, df_evals=200, dt=0.001,
-#     load_gb="data/gb_function.npz", load_fd="data/fd_function.npz")
+run(fx, n_neurons=100, t_train=20, gb_evals=0, gb_evals2=0, df_evals=200, order=2, dt=0.001,
+    load_gb="data/gb_function.npz") # , load_fd="data/fd_function.npz"   

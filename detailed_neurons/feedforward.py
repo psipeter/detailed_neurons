@@ -20,9 +20,10 @@ import seaborn as sns
 sns.set(context='poster', style='white')
 
 def go(n_neurons=100, t=10, m=Uniform(10, 20), i=Uniform(-1, 1), seed=1, dt=0.001, f=Lowpass(0.1),
-       stim_func=lambda t: np.sin(t), g=None, b=None, norm_val=1.0, mirror=True):
+       stim_func=lambda t: np.sin(t), g=None, b=None, norm_val=1.0, mirror=False):
 
-    norm = norms(t, dt, stim_func, f=f, value=norm_val)
+    t_norm = t/2 if mirror else t
+    norm = norms(t_norm, dt, stim_func, f=f, value=norm_val)
 
     with nengo.Network(seed=seed) as model:
 
@@ -36,7 +37,7 @@ def go(n_neurons=100, t=10, m=Uniform(10, 20), i=Uniform(-1, 1), seed=1, dt=0.00
         nengo.Connection(u_raw, u, synapse=None, transform=norm)
 
         # Ensembles
-        pre = nengo.Ensemble(100, 1, radius=norm, max_rates=m, intercepts=i, seed=seed)
+        pre = nengo.Ensemble(100, 1, max_rates=m, intercepts=i, seed=seed)
         nef = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)
         lif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=LIFNorm(max_x=norm_val), seed=seed)
         alif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed)
@@ -90,7 +91,9 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
 
     g = 2e-3 * np.ones((n_neurons, 1))
     b = np.zeros((n_neurons, 1))
-    
+    # omega = np.random.RandomState(seed=gb).uniform(0, 2*np.pi)
+    stim_func = lambda t: np.sin(t)
+
     if load_gb:
         load = np.load(load_gb)
         g = load['g']
@@ -99,9 +102,7 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
         for gb in range(gb_evals):
             print("gain/bias evaluation #%s"%gb)
             # stim_func = nengo.processes.WhiteSignal(period=t/2, high=1, rms=0.5, seed=gb)
-            omega = np.random.RandomState(seed=gb).uniform(0, 2*np.pi)
-            stim_func = lambda t: np.sin(t + omega)
-            data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func, norm_val=1.2, mirror=False)
+            data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func, norm_val=1.2)
             g, b, losses = gb_opt(data['durstewitz'], data['lif'], data['tar'], data['enc'], g, b,
             	dt=dt, name="plots/tuning/feedforward_eval%s_"%gb)
         np.savez('data/gb_feedforward.npz', g=g, b=b)
@@ -116,10 +117,9 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
         f_wilson = Lowpass(np.load(load_fd)['tau_wilson'])[0]
         f_durstewitz = Lowpass(np.load(load_fd)['tau_durstewitz'])[0]
     else:
-        if load_gb:
+        if load_gb or gb_evals == 0:
             print('gathering filter/decoder training data')
-            stim_func = lambda t: np.sin(t)
-            data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func, mirror=False)
+            data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func, norm_val=1.2)
         if df_evals:
             print('optimizing filters and decoders')
             d_lif, f_lif  = df_opt(data['tar'], data['lif'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_lif')
@@ -158,8 +158,8 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
     nrmses = np.zeros((5, n_tests))
     for test in range(n_tests):
         print('test %s' %test)
-        stim_func = nengo.processes.WhiteSignal(period=t, high=1, rms=0.5, seed=100+test)
-        data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func)
+        stim_func = nengo.processes.WhiteSignal(period=t/2, high=1, rms=1, seed=100+test)
+        data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func, mirror=True)
 
         a_lif = f_lif.filt(data['lif'], dt=dt)
         a_alif = f_alif.filt(data['alif'], dt=dt)
@@ -204,4 +204,4 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
     print('confidence intervals: ', CIs)
     np.savez('data/nrmses_feedforward.npz', nrmses=nrmses, means=means, CIs=CIs)
 
-run(t=10, n_neurons=100, gb_evals=15, n_tests=10, df_evals=200, load_gb='data/gb_feedforward.npz')
+run(n_neurons=50, gb_evals=10, n_tests=10, df_evals=200, dt=0.0001)

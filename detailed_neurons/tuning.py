@@ -35,7 +35,7 @@ def go(n_neurons=10, t=10, m=Uniform(10, 20), i=Uniform(-1, 1), seed=1, dt=0.001
         nengo.Connection(u_raw, u, synapse=None, transform=norm)
 
         # Ensembles
-        pre = nengo.Ensemble(100, 1, max_rates=m, intercepts=i, radius=norm, seed=seed)
+        pre = nengo.Ensemble(100, 1, max_rates=m, intercepts=i, seed=seed)
         lif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=LIFNorm(max_x=norm_val), seed=seed)
         # alif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed)
         # wilson = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)

@@ -128,7 +128,7 @@ def tuning_curve(a_ens, xdote, xbins, xmin=-1, xmax=1):
 
 
 def gb_opt(ens, tar, u, enc, g, b, f=Lowpass(0.1), t_transient=0.1, dt=0.001,
-        pt=True, xbins=40, ybins=10, ymax=60, CI=95, name="default", xmin=-1.2, xmax=1.2,
+        pt=True, xbins=40, ybins=10, ymax=60, CI=95, name="default", xmin=-1.0, xmax=1.0,
         delta_g=2e-5, delta_b=2e-5, tol=0.2, thr=3, loss_scale_x=2, loss_scale_y=0.05):
 
     n_neurons = ens.shape[1]
@@ -150,7 +150,7 @@ def gb_opt(ens, tar, u, enc, g, b, f=Lowpass(0.1), t_transient=0.1, dt=0.001,
         for a in a_bins_tar:
             for a2 in a:
                 a_total += a2
-        if a_total < 10000:
+        if a_total < 1.0/dt:
             print('warning: a_tar[%s] is very small' %n)
             continue
 

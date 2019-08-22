@@ -102,16 +102,17 @@ def df_opt(target, spikes, f, name='default', order=1, df_evals=100, seed=0, dt=
         trials=trials)
     best_idx = np.argmin(trials.losses())
     best = trials.trials[best_idx]
+    best_taus = best['result']['taus']
 
     if order == 1:
-        h_new = Lowpass(best['result']['taus'][0])
+        h_new = Lowpass(best_taus[0])
     elif order == 2:
-        h_new = DoubleExp(best['result']['taus'][0], best['result']['taus'][1])
+        h_new = DoubleExp(best_taus[0], best_taus[1])
     d_new = LstsqL2(reg=best['result']['reg'])(
         h_new.filt(np.load('data/%s_spk.npz'%name)['spikes'], dt=dt),
         np.load('data/%s_tar.npz'%name)['target'])[0]
         
-    return d_new, h_new
+    return d_new, h_new, best_taus
 
 
 def tuning_curve(a_ens, xdote, xbins, xmin=-1, xmax=1):
@@ -140,6 +141,7 @@ def gb_opt(ens, tar, u, enc, g, b, f=Lowpass(0.1), t_transient=0.1, dt=0.001,
         xdote = np.dot(u, enc[n])
         xdote_bins, a_bins_ens = tuning_curve(a_ens[:,n], xdote, xbins, xmin, xmax)
         xdote_bins, a_bins_tar = tuning_curve(a_tar[:,n], xdote, xbins, xmin, xmax)
+#         print(xdote_bins, a_bins_tar)
         CIs_ens = np.zeros((xbins, 2))
         CIs_tar = np.zeros((xbins, 2))
         for x in range(xbins):
@@ -166,8 +168,10 @@ def gb_opt(ens, tar, u, enc, g, b, f=Lowpass(0.1), t_transient=0.1, dt=0.001,
             if CIs_tar[x, 1] > thr:
                 x_int_tar = xdote_bins[x]
                 break
-        y_int_ens = np.mean(a_bins_ens[-1])
-        y_int_tar = np.mean(a_bins_tar[-1])
+#         y_int_ens = np.mean(a_bins_ens[-1])
+#         y_int_tar = np.mean(a_bins_tar[-1])
+        y_int_ens = np.max(a_ens[:,n])
+        y_int_tar = np.max(a_tar[:,n])
         loss_x = (x_int_ens - x_int_tar) * loss_scale_x
         loss_y = (y_int_ens - y_int_tar) * loss_scale_y
 
@@ -197,6 +201,7 @@ def gb_opt(ens, tar, u, enc, g, b, f=Lowpass(0.1), t_transient=0.1, dt=0.001,
             plt.savefig(name+"neuron%s"%n)
             plt.close()
 
+        # print('neuron', n)
         # print('x_int_ens', x_int_ens)
         # print('x_int_tar', x_int_tar)
         # print('y_int_ens', y_int_ens)

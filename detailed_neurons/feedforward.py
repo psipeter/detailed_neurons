@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set(context='poster', style='white')
 
-def go(n_neurons=100, t=10, m=Uniform(10, 20), i=Uniform(-1, 1), seed=1, dt=0.001, f=Lowpass(0.1),
+def go(n_neurons=100, t=10, m=Uniform(10, 20), i=Uniform(-1, 0.8), seed=1, dt=0.001, f=Lowpass(0.1),
        stim_func=lambda t: np.sin(t), g=None, b=None, norm_val=1.0, mirror=False):
 
     t_norm = t/2 if mirror else t
@@ -39,9 +39,9 @@ def go(n_neurons=100, t=10, m=Uniform(10, 20), i=Uniform(-1, 1), seed=1, dt=0.00
         # Ensembles
         pre = nengo.Ensemble(100, 1, max_rates=m, intercepts=i, seed=seed)
         nef = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)
-        lif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=LIFNorm(max_x=norm_val), seed=seed)
+        lif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)
         alif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed)
-        wilson = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)
+        wilson = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=WilsonEuler(), seed=seed)
         durstewitz = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=DurstewitzNeuron(), seed=seed)
         tar = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
 
@@ -104,7 +104,7 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
             # stim_func = nengo.processes.WhiteSignal(period=t/2, high=1, rms=0.5, seed=gb)
             data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func, norm_val=1.2)
             g, b, losses = gb_opt(data['durstewitz'], data['lif'], data['tar'], data['enc'], g, b,
-            	dt=dt, name="plots/tuning/feedforward_eval%s_"%gb)
+            	dt=0.001, name="plots/tuning/feedforward_eval%s_"%gb)
         np.savez('data/gb_feedforward.npz', g=g, b=b)
 
     if load_fd:
@@ -112,22 +112,28 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
         d_alif = np.load(load_fd)['d_alif']
         d_wilson = np.load(load_fd)['d_wilson']
         d_durstewitz = np.load(load_fd)['d_durstewitz']
-        f_lif = Lowpass(np.load(load_fd)['tau_lif'])[0]
-        f_alif = Lowpass(np.load(load_fd)['tau_alif'])[0]
-        f_wilson = Lowpass(np.load(load_fd)['tau_wilson'])[0]
-        f_durstewitz = Lowpass(np.load(load_fd)['tau_durstewitz'])[0]
+        if len(load['taus_lif']) == 1:
+            f_lif = Lowpass(load['taus_lif'][0])
+            f_alif = Lowpass(load['taus_alif'][0])
+            f_wilson = Lowpass(load['taus_wilson'][0])
+            f_durstewitz = Lowpass(load['taus_durstewitz'][0])
+        elif len(load['taus_lif']) == 2:
+            f_lif = DoubleExp(load['taus_lif'][0], load['taus_lif'][1])
+            f_alif = DoubleExp(load['taus_alif'][0], load['taus_alif'][1])
+            f_wilson = DoubleExp(load['taus_wilson'][0], load['taus_wilson'][1])
+            f_durstewitz = DoubleExp(load['taus_durstewitz'][0], load['taus_durstewitz'][1])
     else:
-        if load_gb or gb_evals == 0:
-            print('gathering filter/decoder training data')
-            data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func, norm_val=1.2)
+        print('gathering filter/decoder training data')
+        data = go(n_neurons=n_neurons, t=t, f=f, g=g, b=b, dt=dt, stim_func=stim_func, norm_val=1.2)
         if df_evals:
             print('optimizing filters and decoders')
-            d_lif, f_lif  = df_opt(data['tar'], data['lif'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_lif')
-            d_alif, f_alif  = df_opt(data['tar'], data['alif'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_alif')
-            d_wilson, f_wilson  = df_opt(data['tar'], data['wilson'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_wilson')
-            d_durstewitz, f_durstewitz  = df_opt(data['tar'], data['durstewitz'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_durstewitz')
+            d_lif, f_lif, taus_lif  = df_opt(data['tar'], data['lif'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_lif')
+            d_alif, f_alif, taus_alif  = df_opt(data['tar'], data['alif'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_alif')
+            d_wilson, f_wilson, taus_wilson  = df_opt(data['tar'], data['wilson'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_wilson')
+            d_durstewitz, f_durstewitz, taus_durstewitz  = df_opt(data['tar'], data['durstewitz'], f, order=order, df_evals=df_evals, dt=dt, name='feedforward_durstewitz')
         else:
             f_lif, f_alif, f_wilson, f_durstewitz = f, f, f, f
+            taus_lif, taus_alif, taus_wilson, taus_durstewitz = [0.1]
             d_lif = d_opt(data['tar'], data['lif'], f_lif, f, dt=dt)
             d_alif = d_opt(data['tar'], data['alif'], f_alif, f, dt=dt)
             d_wilson = d_opt(data['tar'], data['wilson'], f_wilson, f, dt=dt)
@@ -137,10 +143,10 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
             d_alif=d_alif,
             d_wilson=d_wilson,
             d_durstewitz=d_durstewitz,
-            tau_lif=-1.0/f_lif.poles,
-            tau_alif=-1.0/f_alif.poles,
-            tau_wilson=-1.0/f_wilson.poles,
-            tau_durstewitz=-1.0/f_durstewitz.poles)
+            taus_lif=taus_lif,
+            taus_alif=taus_alif,
+            taus_wilson=taus_wilson,
+            taus_durstewitz=taus_durstewitz)
 
         times = np.arange(0, 1, 0.0001)
         fig, ax = plt.subplots(figsize=((12, 8)))
@@ -204,4 +210,4 @@ def run(n_neurons=100, t=10, f=Lowpass(0.1), dt=0.001, n_tests=10,
     print('confidence intervals: ', CIs)
     np.savez('data/nrmses_feedforward.npz', nrmses=nrmses, means=means, CIs=CIs)
 
-run(n_neurons=50, gb_evals=10, n_tests=10, df_evals=200, dt=0.0001)
+run(n_neurons=30, gb_evals=10, n_tests=10, df_evals=100, dt=0.000025, load_gb="data/gb_feedforward.npz")

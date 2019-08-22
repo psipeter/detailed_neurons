@@ -241,18 +241,17 @@ class WilsonEuler(NeuronType):
             dt=0.000025, settle_time=0.1, sim_time=1.0)
 
 
-    def step_math(self, dt, J, spiked, V, R, H, AP, ddt=0.000025):
+    def step_math(self, dt, J, spiked, V, R, H, AP):
+        # must use dt<0.0001 to avoid numerical errors
         if np.abs(J).any() >= 2.0:
             warnings.warn("input current exceeds failure point; clipping")
             J = J.clip(max=self._maxJ)
-        for step in range(int(dt/ddt)):
-            dV = -(17.81 + 47.58*V + 33.80*np.square(V))*(V - 0.48) - 26*R*(V + 0.95) - 13*H*(V + 0.95) + J
-            dR = -R + 1.29*V + 0.79 + 3.30*np.square(V + 0.38)
-            dH = -H + 11*(V + 0.754)*(V + 0.69)
-        
-            V[:] = (V + dV * ddt/self.tau_V).clip(-0.9, 0.3)
-            R[:] = (R + dR * ddt/self.tau_R)  # .clip(0.18, 0.42)
-            H[:] = (H + dH * ddt/self.tau_H)  # .clip(0, 0.23)
+        dV = -(17.81 + 47.58*V + 33.80*np.square(V))*(V - 0.48) - 26*R*(V + 0.95) - 13*H*(V + 0.95) + J
+        dR = -R + 1.29*V + 0.79 + 3.30*np.square(V + 0.38)
+        dH = -H + 11*(V + 0.754)*(V + 0.69)
+        V[:] = (V + dV * dt/self.tau_V).clip(-0.9, 0.3)
+        R[:] = (R + dR * dt/self.tau_R)  # .clip(0.18, 0.42)
+        H[:] = (H + dH * dt/self.tau_H)  # .clip(0, 0.23)
         spiked[:] = (V > self.threshold) & (~AP)
         spiked /= dt
         AP[:] = V > self.threshold

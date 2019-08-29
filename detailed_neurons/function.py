@@ -129,12 +129,11 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
         load_gb=False, load_gb2=False, load_fd=False, load_fd2=False):
 
     g = 2e-3 * np.ones((n_neurons, 1))
-    g2 = 6e-3 * np.ones((n_neurons, 1))
+    g2 = 4e-3 * np.ones((n_neurons, 1))
     b = np.zeros((n_neurons, 1))
     b2 = np.zeros((n_neurons, 1))
     f_lif, f_alif, f_wilson, f_durstewitz = f, f, f, f
     d_lif, d_alif, d_wilson, d_durstewitz = np.zeros((n_neurons, 1)), np.zeros((n_neurons, 1)), np.zeros((n_neurons, 1)), np.zeros((n_neurons, 1))
-    # omega = np.random.RandomState(seed=gb).uniform(0, 2*np.pi)
     stim_func = lambda t: np.sin(t)
 
     '''optimization for ens1'''
@@ -145,6 +144,7 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
     else:
         for gb in range(gb_evals):
             print("gain1/bias1 evaluation #%s"%gb)
+#             stim_func = nengo.processes.WhiteSignal(period=t_train/2, high=1, rms=1, seed=0)
             data = go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstewitz,
                 n_neurons=n_neurons, t=t_train, f=f, dt=0.001, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, norm_val=1.0)
             g, b, losses = gb_opt(data['durstewitz'], data['lif'], data['tar'], data['enc'], g, b,
@@ -181,9 +181,10 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
             f_durstewitz_fx = DoubleExp(load['taus_durstewitz_fx'][0], load['taus_durstewitz_fx'][1])
     else:
         print('gathering filter/decoder training data')
+        stim_func = nengo.processes.WhiteSignal(period=t_train/2, high=1, rms=1, seed=0)
         data = go(fx, d_lif, d_alif, d_wilson, d_durstewitz,
             f_lif, f_alif, f_wilson, f_durstewitz,
-            n_neurons=n_neurons, t=t_train, f=f, dt=dt, stim_func=stim_func, norm_val=1.0,
+            n_neurons=n_neurons, t=t_train, f=f, dt=dt, stim_func=stim_func, mirror=True, norm_val=1.0,
             g=g, b=b, g2=g2, b2=b2)            
         if df_evals:
             print('optimizing filters/decoders for readout')
@@ -308,19 +309,20 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
         load = np.load(load_gb2)
         g2 = load['g2']
         b2 = load['b2']
-    # else:
+    else:
         for gb in range(gb_evals2):
-            print("gain2/bias2 evaluation #%s"%(gb+10))
-            def cc(x): return x
-            data = go(cc, d_lif_out, d_alif_out, d_wilson_out, d_durstewitz_out,
-                f_lif_out, f_alif_out, f_wilson_out, f_durstewitz_out,
-                n_neurons=n_neurons, t=t_train, f=f, dt=0.001, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, norm_val=1.0)
+            print("gain2/bias2 evaluation #%s"%(gb))
+            # def cc(x): return x
+            # data = go(cc, d_lif_out, d_alif_out, d_wilson_out, d_durstewitz_out,
+            #     f_lif_out, f_alif_out, f_wilson_out, f_durstewitz_out,
+            #     n_neurons=n_neurons, t=t_train, f=f, dt=0.001, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, norm_val=1.0)
+            # g2, b2, losses = gb_opt(data['durstewitz2'], data['lif2'], data['tar2'], data['enc2'], g2, b2,
+            #     delta_g=4e-5, dt=0.001, name="plots/tuning/function2_eval%s_"%(gb))  # delta_g=4e-5, delta_b=4e-5, 
+            stim_func = nengo.processes.WhiteSignal(period=t_train/2, high=1, rms=1, seed=0)
+            data = go(fx, d_lif_fx, d_alif_fx, d_wilson_fx, d_durstewitz_fx, f_lif_fx, f_alif_fx, f_wilson_fx, f_durstewitz_fx,
+                n_neurons=n_neurons, t=t_train, f=f, dt=0.001, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, mirror=True, norm_val=1.0)
             g2, b2, losses = gb_opt(data['durstewitz2'], data['lif2'], data['tar2'], data['enc2'], g2, b2,
-                delta_g=4e-5, dt=0.001, name="plots/tuning/function2_eval%s_"%(gb+10))  # delta_g=4e-5, delta_b=4e-5, 
-            # data = go(fx, d_lif_fx, d_alif_fx, d_wilson_fx, d_durstewitz_fx, f_lif_fx, f_alif_fx, f_wilson_fx, f_durstewitz_fx,
-            #     n_neurons=n_neurons, t=t_train, f=f, dt=dt, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, norm_val=1.0)
-            # g2, b2, losses = gb_opt(data['durstewitz2'], data['lif2'], data['tar2'], data['enc'], g2, b2,
-            # 	delta_g=5e-5, delta_b=5e-5, dt=dt, check_dy_xint=True, name="plots/tuning/function2_eval%s_"%gb)
+            	dt=0.001, name="plots/tuning/function2_eval%s_"%gb)
         np.savez('data/gb_function2.npz', g=g, b=b, g2=g2, b2=b2)
 
     # d_lif2_out = d_lif_out
@@ -349,15 +351,16 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
             f_durstewitz2_out = DoubleExp(load['taus_durstewitz2_out'][0], load['taus_durstewitz2_out'][1])
     else:
         print('gathering filter/decoder training data2')
-        def cc(x): return x
-        stim_func = lambda t: np.square(np.sin(t))
-        data = go(cc, d_lif_out, d_alif_out, d_wilson_out, d_durstewitz_out,
-            f_lif_out, f_alif_out, f_wilson_out, f_durstewitz_out,
-            n_neurons=n_neurons, t=t_train, f=f, dt=dt, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, norm_val=1.0)
-        # data = go(fx, d_lif_fx, d_alif_fx, d_wilson_fx, d_durstewitz_fx,
-        #     f_lif_fx, f_alif_fx, f_wilson_fx, f_durstewitz_fx,
-        #     n_neurons=n_neurons, t=t_train, f=f, dt=dt, stim_func=stim_func, norm_val=1.0,
-        #     g=g, b=b, g2=g2, b2=b2)
+        # def cc(x): return x
+        # stim_func = lambda t: np.square(np.sin(2*t))
+        stim_func = nengo.processes.WhiteSignal(period=t_train/2, high=1, rms=1, seed=0)
+        # data = go(cc, d_lif_out, d_alif_out, d_wilson_out, d_durstewitz_out,
+        #     f_lif_out, f_alif_out, f_wilson_out, f_durstewitz_out,
+        #     n_neurons=n_neurons, t=t_train, f=f, dt=dt, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, norm_val=1.0)
+        data = go(fx, d_lif_fx, d_alif_fx, d_wilson_fx, d_durstewitz_fx,
+            f_lif_fx, f_alif_fx, f_wilson_fx, f_durstewitz_fx,
+            n_neurons=n_neurons, t=t_train, f=f, dt=dt, stim_func=stim_func, mirror=True, norm_val=1.0,
+            g=g, b=b, g2=g2, b2=b2)
         if df_evals:
             print('optimizing filters/decoders for readout2')
             d_lif2_out, f_lif2_out, taus_lif2_out= df_opt(
@@ -516,5 +519,6 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
 
 
 def fx(x): return np.square(x)
-run(fx, n_neurons=50, n_tests=3, t_train=10, gb_evals=0, gb_evals2=10, df_evals=100, order=2, dt=0.000025,
-    load_fd="data/fd_function.npz", load_gb="data/gb_function.npz", load_gb2="data/gb_function2.npz")
+run(fx, n_neurons=30, n_tests=3, t_train=30, gb_evals=5, gb_evals2=5, df_evals=100, order=2, dt=0.000025,
+    load_gb="data/gb_function.npz")
+    # load_fd="data/fd_function.npz", load_gb2="data/gb_function2.npz")

@@ -2,7 +2,7 @@ import numpy as np
 
 import nengo
 from nengo.params import Default
-from nengo.dists import Uniform, Choice
+from nengo.dists import Uniform, Choice, Exponential
 from nengo.solvers import LstsqL2, NoSolver
 
 from nengolib import Lowpass, DoubleExp
@@ -21,7 +21,7 @@ sns.set(context='poster', style='white')
 
 
 def go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstewitz,
-        n_neurons=100, t=10, seed=0, dt=0.001, f=Lowpass(0.1), m=Uniform(10, 20), i=Uniform(-1, 0.8),
+        n_neurons=100, t=10, seed=0, dt=0.001, f=Lowpass(0.1), m=Uniform(10, 20), i=Uniform(-0.7, 0.7), i2=Uniform(-0.1, 0.7),
         stim_func=lambda t: np.sin(t), g=None, b=None, g2=None, b2=None, norm_val=1.0, mirror=False):
 
     solver_lif = NoSolver(d_lif)
@@ -30,7 +30,7 @@ def go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_dur
     solver_durstewitz = NoSolver(d_durstewitz)
     t_norm = t/2 if mirror else t
     norm = norms(t_norm, dt, stim_func, f=f, value=norm_val)
- 
+
     with nengo.Network(seed=seed) as model:
 
         # Stimulus and Nodes
@@ -50,11 +50,11 @@ def go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_dur
         wilson = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=WilsonEuler(), seed=seed, label='wilson')
         durstewitz = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=DurstewitzNeuron(), seed=seed, label='durstewitz')
         tar = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
-        nef2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, encoders=Choice([[1]]), neuron_type=nengo.LIF(), seed=seed, label='nef2')
-        lif2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, encoders=Choice([[1]]), neuron_type=nengo.LIF(), seed=seed, label='lif2')
-        alif2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, encoders=Choice([[1]]), neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed, label='alif2')
-        wilson2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, encoders=Choice([[1]]), neuron_type=WilsonEuler(), seed=seed, label='wilson2')
-        durstewitz2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, encoders=Choice([[1]]), neuron_type=DurstewitzNeuron(), seed=seed, label='durstewitz2')
+        nef2 = nengo.Ensemble(n_neurons, 1, max_rates=m, encoders=Choice([[1]]), intercepts=i2, neuron_type=nengo.LIF(), seed=seed, label='nef2')
+        lif2 = nengo.Ensemble(n_neurons, 1, max_rates=m, encoders=Choice([[1]]), intercepts=i2, neuron_type=nengo.LIF(), seed=seed, label='lif2')
+        alif2 = nengo.Ensemble(n_neurons, 1, max_rates=m, encoders=Choice([[1]]), intercepts=i2, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed, label='alif2')
+        wilson2 = nengo.Ensemble(n_neurons, 1, max_rates=m, encoders=Choice([[1]]), intercepts=i2, neuron_type=WilsonEuler(), seed=seed, label='wilson2')
+        durstewitz2 = nengo.Ensemble(n_neurons, 1, max_rates=m, encoders=Choice([[1]]), intercepts=i2, neuron_type=DurstewitzNeuron(), seed=seed, label='durstewitz2')
         tar2 = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
 
         # Connections
@@ -125,7 +125,7 @@ def go(fx, d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_dur
 
 
 def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
-        n_tests=10, gb_evals=10, gb_evals2=0, df_evals=100, order=1,
+        n_tests=10, gb_evals=10, gb_evals2=0, df_evals=100, order=1, reg=1e-1, 
         load_gb=False, load_gb2=False, load_fd=False, load_fd2=False):
 
     g = 2e-3 * np.ones((n_neurons, 1))
@@ -198,13 +198,13 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
                 data['tar'], data['durstewitz'], f, order=order, df_evals=df_evals, dt=dt, name='function_durstewitz')
             print('optimizing filters/decoders for fx')        
             d_lif_fx, f_lif_fx, taus_lif_fx = df_opt(
-                fx(data['tar']), data['lif'], f, order=order, df_evals=df_evals, dt=dt, name='function_fx_lif')
+                fx(data['tar']), data['lif'], f, order=order, df_evals=df_evals, dt=dt, reg=reg, name='function_fx_lif')
             d_alif_fx, f_alif_fx, taus_alif_fx  = df_opt(
-                fx(data['tar']), data['alif'], f, order=order, df_evals=df_evals, dt=dt, name='function_fx_alif')
+                fx(data['tar']), data['alif'], f, order=order, df_evals=df_evals, dt=dt, reg=reg, name='function_fx_alif')
             d_wilson_fx, f_wilson_fx, taus_wilson_fx  = df_opt(
-                fx(data['tar']), data['wilson'], f, order=order, df_evals=df_evals, dt=dt, name='function_fx_wilson')
+                fx(data['tar']), data['wilson'], f, order=order, df_evals=df_evals, dt=dt, reg=reg, name='function_fx_wilson')
             d_durstewitz_fx, f_durstewitz_fx, taus_durstewitz_fx  = df_opt(
-                fx(data['tar']), data['durstewitz'], f, order=order, df_evals=df_evals, dt=dt, name='function_fx_durstewitz')
+                fx(data['tar']), data['durstewitz'], f, order=order, df_evals=df_evals, dt=dt, reg=reg, name='function_fx_durstewitz')
         else:
             d_lif_out = d_opt(data['tar'], data['lif'], f_lif, f, dt=dt)
             d_alif_out = d_opt(data['tar'], data['alif'], f_alif, f, dt=dt)
@@ -319,10 +319,13 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
             # g2, b2, losses = gb_opt(data['durstewitz2'], data['lif2'], data['tar2'], data['enc2'], g2, b2,
             #     delta_g=4e-5, dt=0.001, name="plots/tuning/function2_eval%s_"%(gb))  # delta_g=4e-5, delta_b=4e-5, 
             stim_func = nengo.processes.WhiteSignal(period=t_train/2, high=1, rms=1, seed=0)
+            # stim_func = lambda t: np.sin(t)
             data = go(fx, d_lif_fx, d_alif_fx, d_wilson_fx, d_durstewitz_fx, f_lif_fx, f_alif_fx, f_wilson_fx, f_durstewitz_fx,
-                n_neurons=n_neurons, t=t_train, f=f, dt=0.001, g=g, b=b, g2=g2, b2=b2, stim_func=stim_func, mirror=True, norm_val=1.0)
+                n_neurons=n_neurons, t=t_train, f=f, dt=0.001, g=g, b=b, g2=g2, b2=b2,
+                stim_func=stim_func, mirror=True, norm_val=1.1)
             g2, b2, losses = gb_opt(data['durstewitz2'], data['lif2'], data['tar2'], data['enc2'], g2, b2,
-            	dt=0.001, name="plots/tuning/function2_eval%s_"%gb)
+            	delta_g=6e-5, delta_b=1e-5, xmin=0.0, dt=0.001, loss_scale_y=0.1,
+                y_int='last', name="plots/tuning/function2_eval%s_"%gb)
         np.savez('data/gb_function2.npz', g=g, b=b, g2=g2, b2=b2)
 
     # d_lif2_out = d_lif_out
@@ -363,14 +366,14 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
             g=g, b=b, g2=g2, b2=b2)
         if df_evals:
             print('optimizing filters/decoders for readout2')
-            d_lif2_out, f_lif2_out, taus_lif2_out= df_opt(
-                data['tar2'], data['lif2'], f, order=order, df_evals=df_evals, dt=dt, name='function_lif2')
-            d_alif2_out, f_alif2_out, taus_alif2_out = df_opt(
-                data['tar2'], data['alif2'], f, order=order, df_evals=df_evals, dt=dt, name='function_alif2')
-            d_wilson2_out, f_wilson2_out, taus_wilson2_out = df_opt(
-                data['tar2'], data['wilson2'], f, order=order, df_evals=df_evals, dt=dt, name='function_wilson2')
-            d_durstewitz2_out, f_durstewitz2_out, taus_durstewitz2_out = df_opt(
-                data['tar2'], data['durstewitz2'], f, order=order, df_evals=df_evals, dt=dt, name='function_durstewitz2')
+            d_lif2_out, f_lif2_out, taus_lif2_out= df_opt(data['tar2'], data['lif2'], f, 
+                order=order, reg=reg, df_evals=df_evals, dt=dt, tau_mins=[5e-4, 1e-4], name='function_lif2')
+            d_alif2_out, f_alif2_out, taus_alif2_out = df_opt(data['tar2'], data['alif2'], f, 
+                order=order, reg=reg, df_evals=df_evals, dt=dt, tau_mins=[5e-4, 1e-4], name='function_alif2')
+            d_wilson2_out, f_wilson2_out, taus_wilson2_out = df_opt(data['tar2'], data['wilson2'], f, 
+                order=order, reg=reg, df_evals=df_evals, dt=dt, tau_mins=[5e-4, 1e-4], name='function_wilson2')
+            d_durstewitz2_out, f_durstewitz2_out, taus_durstewitz2_out = df_opt(data['tar2'], data['durstewitz2'], f, 
+                order=order, reg=reg, df_evals=df_evals, dt=dt, tau_mins=[5e-4, 1e-4], name='function_durstewitz2')
         else:
             d_lif2_out = d_opt(data['tar2'], data['lif2'], f_lif, f, dt=dt)
             d_alif2_out = d_opt(data['tar2'], data['alif2'], f_alif, f, dt=dt)
@@ -519,6 +522,5 @@ def run(fx, n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001,
 
 
 def fx(x): return np.square(x)
-run(fx, n_neurons=30, n_tests=3, t_train=30, gb_evals=5, gb_evals2=5, df_evals=100, order=2, dt=0.000025,
-    load_gb="data/gb_function.npz")
-    # load_fd="data/fd_function.npz", load_gb2="data/gb_function2.npz")
+run(fx, n_neurons=30, n_tests=3, t_train=20, gb_evals=10, gb_evals2=10, df_evals=100, order=2, dt=0.001, reg=1e-1,
+    load_gb="data/gb_function.npz")  # , load_fd="data/fd_function.npz")  # , load_gb2="data/gb_function2.npz")  

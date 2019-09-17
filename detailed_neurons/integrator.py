@@ -8,7 +8,7 @@ from nengo.solvers import LstsqL2, NoSolver
 from nengolib import Lowpass, DoubleExp
 from nengolib.signal import s, z, nrmse, LinearSystem
 
-from train import norms, df_opt, gb_opt, d_opt
+from train import norms, downsample_spikes, df_opt, gb_opt, d_opt
 from neuron_models import LIFNorm, AdaptiveLIFT, WilsonEuler, DurstewitzNeuron, reset_neuron
 
 import neuron
@@ -21,7 +21,7 @@ sns.set(context='poster', style='white')
 
 
 def go(d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstewitz,
-        n_neurons=100, t=10, m=Uniform(10, 20), i=Uniform(-1, 0.8), seed=0, dt=0.001, f=Lowpass(0.1), T=0.1,
+        n_neurons=100, t=10, m=Uniform(10, 20), i=Uniform(-0.7, 0.7), seed=0, dt=0.001, f=Lowpass(0.1), T=0.1,
         stim_func=lambda t: np.sin(t), g=None, b=None, mirror=False, norm_val=1.0, supv=0):
 
     solver_lif = NoSolver(d_lif)
@@ -51,7 +51,7 @@ def go(d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstew
         lif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed, label='lif')
         alif = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed, label='alif')
         wilson = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=WilsonEuler(), seed=seed, label='wilson')
-        durstewitz = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=DurstewitzNeuron(), seed=seed, label='durstewitz')
+        durstewitz = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=DurstewitzNeuron(),seed=seed, label='durstewitz')
 
         # Target connections
         nengo.Connection(u, x, synapse=1/s)
@@ -124,7 +124,7 @@ def go(d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstew
 
 
 def run(n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, n_trains=1,
-        n_tests=10, gb_evals=10, gb_evals2=10, df_evals=100, order=1,
+        n_tests=10, gb_evals=10, gb_evals2=10, df_evals=100, order=1, dt_sample=0.001,
         load_gb=False, load_fd=False):
 
     g = 2e-3 * np.ones((n_neurons, 1))
@@ -139,12 +139,12 @@ def run(n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, n_trains=1,
         b = load['b']
     else:
         for gb in range(gb_evals):
-            print("gain1/bias1 evaluation #%s"%gb)
+            print("gain1/bias1 evaluation #%s"%(gb+3))
             data = go(d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstewitz,
                 n_neurons=n_neurons, t=t_train, f=f, dt=0.001, g=g, b=b, stim_func=stim_func, supv=1, norm_val=1.2)
             g, b, losses = gb_opt(data['durstewitz'], data['lif'], data['x'], data['enc'], g, b,
-                dt=0.001, name="plots/tuning/integrator_eval%s_"%gb)
-        np.savez('data/gb_integrator.npz', g=g, b=b)
+                dt=0.001, name="plots/tuning/integrator_eval%s_"%(gb+3))
+            np.savez('data/gb_integrator.npz', g=g, b=b)
 
     # Run many short trials to generate training data for decoders and filters without large drift.
     if load_fd:
@@ -165,39 +165,39 @@ def run(n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, n_trains=1,
             f_durstewitz = DoubleExp(load['taus_durstewitz'][0], load['taus_durstewitz'][1])
     else:
         print('gathering filter and decoder training data')
-        A_lif = np.zeros((n_trains, int(t_train/dt), n_neurons))
-        A_alif = np.zeros((n_trains, int(t_train/dt), n_neurons))
-        A_wilson = np.zeros((n_trains, int(t_train/dt), n_neurons))
-        A_durstewitz = np.zeros((n_trains, int(t_train/dt), n_neurons))
-        nef = np.zeros((n_trains, int(t_train/dt), 1))
-        targets = np.zeros((n_trains, int(t_train/dt), 1))
-        time = np.zeros((n_trains, int(t_train/dt)))
+        A_lif = np.zeros((n_trains, int(t_train/dt_sample), n_neurons))
+        A_alif = np.zeros((n_trains, int(t_train/dt_sample), n_neurons))
+        A_wilson = np.zeros((n_trains, int(t_train/dt_sample), n_neurons))
+        A_durstewitz = np.zeros((n_trains, int(t_train/dt_sample), n_neurons))
+        nef = np.zeros((n_trains, int(t_train/dt_sample), 1))
+        targets = np.zeros((n_trains, int(t_train/dt_sample), 1))
+        time = np.zeros((n_trains, int(t_train/dt_sample)))
         for n in range(n_trains):
             print("training evaluation #%s"%n)
             stim_func = nengo.processes.WhiteSignal(period=t_train/2, high=1, rms=1, seed=n)
             data = go(d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstewitz,
                 n_neurons=n_neurons, t=t_train, f=f, dt=dt, g=g, b=b, stim_func=stim_func,
                 mirror=True, norm_val=1.0, supv=1)
-            A_lif[n] = data['lif']
-            A_alif[n] = data['alif']
-            A_wilson[n] = data['wilson']
-            A_durstewitz[n] = data['durstewitz']
-            nef[n] = data['nef']
-            targets[n] = data['x']
-            time[n] = data['times']
-        A_lif = A_lif.reshape((n_trains*int(t_train/dt), n_neurons))
-        A_alif = A_alif.reshape((n_trains*int(t_train/dt), n_neurons))
-        A_wilson = A_wilson.reshape((n_trains*int(t_train/dt), n_neurons))
-        A_durstewitz = A_durstewitz.reshape((n_trains*int(t_train/dt), n_neurons))
-        nef = nef.reshape((n_trains*int(t_train/dt), 1))        
-        targets = targets.reshape((n_trains*int(t_train/dt), 1))        
-        time = time.reshape((n_trains*int(t_train/dt)))        
+            A_lif[n] = downsample_spikes(data['lif'], dt=dt, dt_sample=dt_sample)
+            A_alif[n] = downsample_spikes(data['alif'], dt=dt, dt_sample=dt_sample)
+            A_wilson[n] = downsample_spikes(data['wilson'], dt=dt, dt_sample=dt_sample)
+            A_durstewitz[n] = downsample_spikes(data['durstewitz'], dt=dt, dt_sample=dt_sample)
+            nef[n] = data['nef'][::int(dt_sample/dt)]
+            targets[n] = data['x'][::int(dt_sample/dt)]
+            time[n] = data['times'][::int(dt_sample/dt)]
+        A_lif = A_lif.reshape((n_trains*int(t_train/dt_sample), n_neurons))
+        A_alif = A_alif.reshape((n_trains*int(t_train/dt_sample), n_neurons))
+        A_wilson = A_wilson.reshape((n_trains*int(t_train/dt_sample), n_neurons))
+        A_durstewitz = A_durstewitz.reshape((n_trains*int(t_train/dt_sample), n_neurons))
+        nef = nef.reshape((n_trains*int(t_train/dt_sample), 1))        
+        targets = targets.reshape((n_trains*int(t_train/dt_sample), 1))        
+        time = time.reshape((n_trains*int(t_train/dt_sample)))        
         if df_evals:
             print('optimizing filters and decoders')
-            d_lif, f_lif, taus_lif = df_opt(targets, A_lif, f, order=order, df_evals=df_evals, dt=dt, name='integrator_lif')
-            d_alif, f_alif, taus_alif = df_opt(targets, A_alif, f, order=order, df_evals=df_evals, dt=dt, name='integrator_alif')
-            d_wilson, f_wilson, taus_wilson = df_opt(targets, A_wilson, f, order=order, df_evals=df_evals, dt=dt, name='integrator_wilson')
-            d_durstewitz, f_durstewitz, taus_durstewitz = df_opt(targets, A_durstewitz, f, order=order, df_evals=df_evals, dt=dt, name='integrator_durstewitz')
+            d_lif, f_lif, taus_lif = df_opt(targets, A_lif, f, order=order, df_evals=df_evals, dt=dt_sample, name='integrator_lif')
+            d_alif, f_alif, taus_alif = df_opt(targets, A_alif, f, order=order, df_evals=df_evals, dt=dt_sample, name='integrator_alif')
+            d_wilson, f_wilson, taus_wilson = df_opt(targets, A_wilson, f, order=order, df_evals=df_evals, dt=dt_sample, name='integrator_wilson')
+            d_durstewitz, f_durstewitz, taus_durstewitz = df_opt(targets, A_durstewitz, f, order=order, df_evals=df_evals, dt=dt_sample, name='integrator_durstewitz')
         else:
             d_lif = d_opt(targets, A_lif, f_lif, f, dt=dt)
             d_alif = d_opt(targets, A_alif, f_alif, f, dt=dt)
@@ -226,11 +226,11 @@ def run(n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, n_trains=1,
         plt.tight_layout()
         plt.savefig("plots/integrator_filters.png")
             
-        a_lif = f_lif.filt(A_lif, dt=dt)
-        a_alif = f_alif.filt(A_alif, dt=dt)
-        a_wilson = f_wilson.filt(A_wilson, dt=dt)
-        a_durstewitz = f_durstewitz.filt(A_durstewitz, dt=dt)
-        target = f.filt(targets, dt=dt)
+        a_lif = f_lif.filt(A_lif, dt=dt_sample)
+        a_alif = f_alif.filt(A_alif, dt=dt_sample)
+        a_wilson = f_wilson.filt(A_wilson, dt=dt_sample)
+        a_durstewitz = f_durstewitz.filt(A_durstewitz, dt=dt_sample)
+        target = f.filt(targets, dt=dt_sample)
         xhat_nef = nef
         xhat_lif = np.dot(a_lif, d_lif)
         xhat_alif = np.dot(a_alif, d_alif)
@@ -248,7 +248,6 @@ def run(n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, n_trains=1,
         plt.legend(loc='upper right')
         plt.savefig("plots/integrator_states_train.png")
 
-    print('running experimental tests')
     nrmses = np.zeros((5, n_tests))
     for test in range(n_tests):
         print('test %s' %test)
@@ -256,12 +255,13 @@ def run(n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, n_trains=1,
         data = go(d_lif, d_alif, d_wilson, d_durstewitz, f_lif, f_alif, f_wilson, f_durstewitz,
             n_neurons=n_neurons, t=t, f=f, dt=dt, g=g, b=b, stim_func=stim_func, mirror=True)
 
-        a_lif = f_lif.filt(data['lif'], dt=dt)
-        a_alif = f_alif.filt(data['alif'], dt=dt)
-        a_wilson = f_wilson.filt(data['wilson'], dt=dt)
-        a_durstewitz = f_durstewitz.filt(data['durstewitz'], dt=dt)
-        target = f.filt(data['x'], dt=dt)
-        xhat_nef = data['nef']
+        a_lif = f_lif.filt(downsample_spikes(data['lif'], dt=dt, dt_sample=dt_sample), dt=dt_sample)
+        a_alif = f_alif.filt(downsample_spikes(data['alif'], dt=dt, dt_sample=dt_sample), dt=dt_sample)
+        a_wilson = f_wilson.filt(downsample_spikes(data['wilson'], dt=dt, dt_sample=dt_sample), dt=dt_sample)
+        a_durstewitz = f_durstewitz.filt(downsample_spikes(data['durstewitz'], dt=dt, dt_sample=dt_sample), dt=dt_sample)
+        target = f.filt(data['x'][::int(dt_sample/dt)], dt=dt_sample)
+        xhat_nef = data['nef'][::int(dt_sample/dt)]
+        times = data['times'][::int(dt_sample/dt)]
         xhat_lif = np.dot(a_lif, d_lif)
         xhat_alif = np.dot(a_alif, d_alif)
         xhat_wilson = np.dot(a_wilson, d_wilson)
@@ -273,12 +273,12 @@ def run(n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, n_trains=1,
         nrmses[4, test] = nrmse(xhat_durstewitz, target=target)
         
         fig, ax = plt.subplots(figsize=((12, 8)))
-        ax.plot(data['times'], target, linestyle="--", label='target')
-        ax.plot(data['times'], xhat_nef, label='NEF, nrmse=%.3f' %nrmses[0, test])
-        ax.plot(data['times'], xhat_lif, label='LIF, nrmse=%.3f' %nrmses[1, test])
-        ax.plot(data['times'], xhat_alif, label='ALIF, nrmse=%.3f' %nrmses[2, test])
-        ax.plot(data['times'], xhat_wilson, label='Wilson, nrmse=%.3f' %nrmses[3, test])
-        ax.plot(data['times'], xhat_durstewitz, label='Durstewitz, nrmse=%.3f' %nrmses[4, test])
+        ax.plot(times, target, linestyle="--", label='target')
+        ax.plot(times, xhat_nef, label='NEF, nrmse=%.3f' %nrmses[0, test])
+        ax.plot(times, xhat_lif, label='LIF, nrmse=%.3f' %nrmses[1, test])
+        ax.plot(times, xhat_alif, label='ALIF, nrmse=%.3f' %nrmses[2, test])
+        ax.plot(times, xhat_wilson, label='Wilson, nrmse=%.3f' %nrmses[3, test])
+        ax.plot(times, xhat_durstewitz, label='Durstewitz, nrmse=%.3f' %nrmses[4, test])
         ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="test %s"%test)
         plt.legend(loc='upper right')
         plt.savefig("plots/integrator_states_test%s.png"%test)
@@ -299,6 +299,6 @@ def run(n_neurons=100, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, n_trains=1,
     print('confidence intervals: ', CIs)
     np.savez('data/nrmses_integrator.npz', nrmses=nrmses, means=means, CIs=CIs)
 
-run(n_neurons=100, t_train=10, n_trains=3, n_tests=3, gb_evals=10, order=2, df_evals=100, dt=0.000025)
-    # load_gb="data/gb_integrator.npz")
+run(n_neurons=200, t=10, t_train=10, n_trains=10, n_tests=10, gb_evals=0, order=2, df_evals=100, dt=0.000025, dt_sample=0.001,
+    load_gb="data/gb_integrator.npz")
    # load_fd="data/fd_integrator.npz")

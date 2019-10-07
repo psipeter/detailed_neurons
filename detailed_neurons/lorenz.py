@@ -4,8 +4,8 @@ import numpy as np
 
 from scipy.signal import argrelextrema
 from scipy.linalg import norm
-from scipy.stats import entropy
 from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import curve_fit
 
 import nengo
 from nengo.params import Default
@@ -28,18 +28,11 @@ from mpl_toolkits.mplot3d import Axes3D
 import seaborn as sns
 sns.set(context='poster', style='white')
 
-def go(d_supv, d_ens, f_ens, n_neurons=3000, t=30, t_supv=1, neuron_type=nengo.LIF(),
-       m=Uniform(10, 20), i=Uniform(-0.7, 0.7), r=40, sigma=10, beta=8.0/3, rho=28, IC=[0,0,0],
-       freq=1, seed=0, dt=0.000025, dt_sample=0.001, f=Lowpass(0.1)):
+def go(d_ens, f_ens, n_neurons=5000, t=30, t_supv=1, neuron_type=nengo.LIF(),
+       m=Uniform(10, 20), i=Uniform(-0.7, 0.7), r=40, IC=[0,0,0],
+       seed=0, dt=0.000025, dt_sample=0.001, f=Lowpass(0.1)):
 
-    solver_supv = NoSolver(d_supv)
     solver_ens = NoSolver(d_ens)
-
-    def feedback(x):
-        dx = sigma * (x[1] - x[0])
-        dy = x[0] * (rho - x[2]) - x[1]
-        dz = x[0] * x[1] - beta *x[2]
-        return [dx, dy, dz]
 
     with nengo.Network(seed=seed) as model:
         # Ensembles
@@ -54,7 +47,7 @@ def go(d_supv, d_ens, f_ens, n_neurons=3000, t=30, t_supv=1, neuron_type=nengo.L
         nengo.Connection(x, x, function=feedback, synapse=~s)
         nengo.Connection(x, supv, synapse=None)
         nengo.Connection(ens.neurons, spikes, synapse=None)
-        ff = nengo.Connection(supv, ens, synapse=f, solver=solver_supv, label='ff', seed=seed)
+        ff = nengo.Connection(supv, ens, synapse=f, label='ff', seed=seed)
         fb = nengo.Connection(ens, ens, synapse=f_ens, solver=solver_ens, label='fb', seed=seed)
         # probes
         p_u = nengo.Probe(u, synapse=None)
@@ -63,7 +56,6 @@ def go(d_supv, d_ens, f_ens, n_neurons=3000, t=30, t_supv=1, neuron_type=nengo.L
         p_ens = nengo.Probe(spikes, synapse=None, sample_every=dt_sample)
 
     with nengo.Simulator(model, seed=seed, dt=dt) as sim:
-        sim.signals[sim.model.sig[ff]['weights']][:] = d_supv.T
         sim.signals[sim.model.sig[fb]['weights']][:] = 0
         sim.run(t_supv)
         sim.signals[sim.model.sig[ff]['weights']][:] = 0
@@ -75,9 +67,30 @@ def go(d_supv, d_ens, f_ens, n_neurons=3000, t=30, t_supv=1, neuron_type=nengo.L
         x=sim.data[p_x],
         ens=sim.data[p_ens])
 
+def feedback(x):
+    sigma = 10
+    beta = 8.0/3
+    rho = 28
+    dx = sigma * (x[1] - x[0])
+    dy = x[0] * (rho - x[2]) - x[1]
+    dz = x[0] * x[1] - beta *x[2]
+    return [dx, dy, dz]
 
-def run(n_neurons=2000, neuron_type=nengo.LIF(), t_train=50, t_supv=1, t=200, f=Lowpass(0.1), dt=0.001, seed=0,
-        m=Uniform(20, 40), i=Uniform(-0.7, 0.7), freq=1, r=40, n_tests=1, dt_sample=0.001, smooth=60,
+def feedback_NEF(x):
+    tau = 0.1
+    sigma = 10
+    beta = 8.0/3
+    rho = 28
+    dx0 = sigma * (x[1] - x[0])
+    dx1 = x[0] * (rho - x[2]) - x[1]
+    dx2 = x[0] * x[1] - beta *x[2]
+    return [dx0 * tau + x[0], dx1 * tau + x[1], dx2 * tau + x[2]]
+
+def mountain(x, a, b, c):
+    return (a*x + b)*(x<=c) + (-a*x + 2*a*c + b)*(x>c)
+
+def run(n_neurons=6000, neuron_type=nengo.LIF(), t_train=50, t_supv=1, t=200, f=Lowpass(0.1), dt=0.001, seed=0,
+        m=Uniform(20, 40), i=Uniform(-0.7, 0.7), r=40, n_tests=1, dt_sample=0.001, smooth=70,
         df_evals=10, order=2, load_fd=False, NEF=False):
 
     g = 2e-3 * np.ones((n_neurons, 1))
@@ -86,21 +99,10 @@ def run(n_neurons=2000, neuron_type=nengo.LIF(), t_train=50, t_supv=1, t=200, f=
     d_ens = np.zeros((n_neurons, 3))
 
     print('gathering feedforward weights')
-    def feedback(x):
-        sigma=10
-        beta=8.0/3
-        rho=28
-        dx = sigma * (x[1] - x[0])
-        dy = x[0] * (rho - x[2]) - x[1]
-        dz = x[0] * x[1] - beta *x[2]
-        return [dx, dy, dz]
     with nengo.Network(seed=seed) as model:
-        supv = nengo.Ensemble(n_neurons, 3, neuron_type=nengo.SpikingRectifiedLinear(), max_rates=m, intercepts=i, radius=r, seed=seed)
-        ens = nengo.Ensemble(n_neurons, 3, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed, radius=r)
-        ff = nengo.Connection(supv, ens, synapse=f, seed=seed)
-        fb = nengo.Connection(ens, ens, synapse=f, function=feedback, seed=seed)
+        ens = nengo.Ensemble(n_neurons, 3, max_rates=m, intercepts=i, neuron_type=nengo.SpikingRectifiedLinear(), seed=seed, radius=r)
+        fb = nengo.Connection(ens, ens, synapse=f, function=feedback_NEF, seed=seed)
     with nengo.Simulator(model, dt=dt, seed=seed) as sim:
-        d_supv = sim.data[ff].weights.T
         d_nef = sim.data[fb].weights.T
 
     if load_fd:
@@ -118,19 +120,13 @@ def run(n_neurons=2000, neuron_type=nengo.LIF(), t_train=50, t_supv=1, t=200, f=
         rng = np.random.RandomState(seed=0)
         IC = rng.uniform(-1, 1, size=3)
         IC /= norm(IC, 1)
-        data = go(d_supv, d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, IC=IC,
+        data = go(d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, IC=IC, r=r,
             t_supv=t_train, t=0, f=f, m=m, i=i, dt=dt, dt_sample=dt_sample, seed=seed)
 
-        times = data['times'][::int(dt_sample/dt)]        
+        times = data['times'][::int(dt_sample/dt)]
         target = data['x'][::int(dt_sample/dt)]
-#         spk_file = h5py.File('data/lorenz_train_spk.h5', 'w')
-#         spk_file.create_dataset('spk', data=data['ens'])  # , compression='gzip'
-#         spk_file.close()
         A_ens = data['ens']
         del(data)
-#         spk_file = h5py.File('data/lorenz_train_spk.h5', 'r')
-#         A_ens = downsample_spikes(spk_file['spk'], dt=dt, dt_sample=dt_sample)
-        # A_ens = downsample_spikes(data['ens'], dt=dt, dt_sample=dt_sample)
         if df_evals:
             print('optimizing filters and decoders')
             d_ens, f_ens, taus_ens = df_opt(target, A_ens, f, order=order, df_evals=df_evals, dt=dt_sample, name='lorenz_%s'%neuron_type)
@@ -152,7 +148,6 @@ def run(n_neurons=2000, neuron_type=nengo.LIF(), t_train=50, t_supv=1, t=200, f=
             
         target = f.filt(target, dt=dt_sample)
         xhat_ens = np.dot(f_ens.filt(A_ens, dt=dt_sample), d_ens)
-        # np.savez("data/lorenz_states_train.npz", target=target, xhat_ens=xhat_ens)
 
         fig, ax = plt.subplots(figsize=((12, 8)))
         ax.plot(times, target, linestyle="--", label='target')
@@ -188,85 +183,68 @@ def run(n_neurons=2000, neuron_type=nengo.LIF(), t_train=50, t_supv=1, t=200, f=
         z_ens = gaussian_filter1d(xhat_ens[:, 2], sigma=smooth)
         z_target_maxima = z_target[argrelextrema(z_target, np.greater)]
         z_ens_maxima = z_ens[argrelextrema(z_ens, np.greater)]
-        z_target_ratios = z_target_maxima[1:] / z_target_maxima[:-1]
-        z_ens_ratios = z_ens_maxima[1:] / z_ens_maxima[:-1]
-        bins = np.linspace(0.8, 1.2, 20)
-        z_target_bins = np.histogram(z_target_ratios, bins=bins, density=True)[0]
-        z_ens_bins = np.histogram(z_ens_ratios, bins=bins, density=True)[0]
-        error = nrmse(z_ens_bins, target=z_target_bins)
-
-        fig, ax = plt.subplots(figsize=((12, 8)))
-        ax.hist(z_target_ratios, bins=bins, density=True, alpha=0.75, label="target")
-        ax.hist(z_ens_ratios, bins=bins, density=True, alpha=0.75, label="ens")
-        # min_len = np.min([len(z_ens_ratios), len(z_target_ratios)])
-        # error = entropy(z_target_ratios[:min_len], z_ens_ratios[:min_len])
-        # error = nrmse(z_target_ratios[:min_len], target=z_ens_ratios[:min_len])
-        # sns.distplot(z_target_ratios, label='target', ax=ax)
-        # sns.distplot(z_ens_ratios, label='ens', ax=ax)
-        ax.set(xlabel=r'$\frac{\mathrm{max}_n (z)}{\mathrm{max}_{n+1} (z)}$', ylabel='freq', title='nrmse=%.3f'%error)
-        plt.legend()
-        plt.savefig("plots/lorenz_train_dist_%s.png"%neuron_type)
+        p0 = [1, 0, 31]
+        bounds = ((0, -30, 25), (2, 30, 45))
+        p_best_target, _ = curve_fit(mountain, z_target_maxima[:-1], z_target_maxima[1:], p0=p0, bounds=bounds)
+        p_best_ens, _ = curve_fit(mountain, z_ens_maxima[:-1], z_ens_maxima[1:], p0=p0, bounds=bounds)
+        error = np.abs(p_best_target[0] - p_best_ens[0])+np.abs(p_best_target[2] - p_best_ens[2])/10
 
         fig, ax = plt.subplots(figsize=((12, 8)))
         ax.scatter(z_target_maxima[:-1], z_target_maxima[1:], label='target')
+        ax.scatter(z_target_maxima[:-1], mountain(z_target_maxima[:-1], *p_best_target), label='target fit')
         ax.scatter(z_ens_maxima[:-1], z_ens_maxima[1:], label='ens')
-        ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$', title='nrmse = %.5f'%error)
+        ax.scatter(z_ens_maxima[:-1], mountain(z_ens_maxima[:-1], *p_best_ens), label='ens fit')
+        ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$', title='error = %.5f'%error)
         plt.legend(loc='upper right')
         plt.savefig("plots/lorenz_train_tent_%s.png"%neuron_type)
 
-    nrmses = np.zeros((n_tests))
+        # fig, ax = plt.subplots(figsize=((12, 8)))
+        # ax.bar(bins, means_target, alpha=0.75, width=bins[1]-bins[0], label="target")
+        # ax.bar(bins, means_ens, alpha=0.75, width=bins[1]-bins[0], label="ens")
+        # ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$', title='nrmse = %.5f'%error)
+        # ax.legend()
+        # plt.savefig("plots/lorenz_train_dist_%s.png"%neuron_type)
+
+    nrmses = np.zeros(n_tests)
     for n in range(n_tests):
         print("test #%s"%n)
         rng = np.random.RandomState(seed=n)
         IC = rng.uniform(-1, 1, size=3)
         IC /= norm(IC, 1)
-        data = go(d_supv, d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, IC=IC,
+        data = go(d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, IC=IC, r=r,
             t_supv=t_supv, t=t, f=f, m=m, i=i, dt=dt, dt_sample=dt_sample, seed=seed)
         times = data['times'][::int(dt_sample/dt)]        
         target = f.filt(data['x'][::int(dt_sample/dt)], dt=dt_sample)
-#         spk_file = h5py.File('data/lorenz_test_spk.h5', 'w')
-#         spk_file.create_dataset('spk', data=data['ens'])  # , compression='gzip'
-#         spk_file.close()
         A_ens = f_ens.filt(data['ens'], dt=dt_sample)
         del(data)
-#         spk_file = h5py.File('data/lorenz_test_spk.h5', 'r')
-#         A_ens = f_ens.filt(downsample_spikes(spk_file['spk'], dt=dt, dt_sample=dt_sample), dt=dt_sample)
         xhat_ens = np.dot(A_ens, d_ens)
-#         spk_file.close()
 
         z_target = gaussian_filter1d(target[:, 2], sigma=smooth)
         z_ens = gaussian_filter1d(xhat_ens[:, 2], sigma=smooth)
         z_target_maxima = z_target[argrelextrema(z_target, np.greater)]
         z_ens_maxima = z_ens[argrelextrema(z_ens, np.greater)]
-        z_target_ratios = z_target_maxima[1:] / z_target_maxima[:-1]
-        z_ens_ratios = z_ens_maxima[1:] / z_ens_maxima[:-1]
-        bins = np.linspace(0.8, 1.2, 20)
-        z_target_bins = np.histogram(z_target_ratios, bins=bins, density=True)[0]
-        z_ens_bins = np.histogram(z_ens_ratios, bins=bins, density=True)[0]
-        error = nrmse(z_ens_bins, target=z_target_bins)
+        p0 = [1, 0, 31]
+        bounds = ((0, -30, 25), (2, 30, 45))
+        p_best_target, _ = curve_fit(mountain, z_target_maxima[:-1], z_target_maxima[1:], p0=p0, bounds=bounds)
+        p_best_ens, _ = curve_fit(mountain, z_ens_maxima[:-1], z_ens_maxima[1:], p0=p0, bounds=bounds)
+        error = np.abs(p_best_target[0] - p_best_ens[0])+np.abs(p_best_target[2] - p_best_ens[2])/10
         nrmses[n] = error
 
         fig, ax = plt.subplots(figsize=((12, 8)))
-        ax.hist(z_target_ratios, bins=bins, density=True, alpha=0.75, label="target")
-        ax.hist(z_ens_ratios, bins=bins, density=True, alpha=0.75, label="ens")
-        ax.set(xlabel=r'$\frac{\mathrm{max}_n (z)}{\mathrm{max}_{n+1} (z)}$', ylabel='freq', title='nrmse = %.5f'%error)
-        plt.legend()
-        plt.savefig("plots/lorenz_test_%s_dist_%s.png"%(n, neuron_type))
-
-        fig, ax = plt.subplots(figsize=((12, 8)))
         ax.scatter(z_target_maxima[:-1], z_target_maxima[1:], label='target')
+        ax.scatter(z_target_maxima[:-1], mountain(z_target_maxima[:-1], *p_best_target), label='target fit')
         ax.scatter(z_ens_maxima[:-1], z_ens_maxima[1:], label='ens')
-        ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$', title='nrmse = %.5f'%error)
+        ax.scatter(z_ens_maxima[:-1], mountain(z_ens_maxima[:-1], *p_best_ens), label='ens fit')
+        ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$', title='error = %.5f'%error)
         plt.legend(loc='upper right')
-        plt.savefig("plots/lorenz_test_%s_tent_%s.png"%(n, neuron_type))
+        plt.savefig("plots/lorenz_test_tent_%s.png"%neuron_type)
 
-        fig, ax = plt.subplots(figsize=((12, 8)))
-        ax.plot(times, target, linestyle="--", label='target')
-        ax.plot(times, xhat_ens, label='%s' %neuron_type)
-        ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="train")
-        plt.legend(loc='upper right')
-        plt.savefig("plots/lorenz_test_%s_time_%s.png"%(n, neuron_type))
-        plt.close()
+        # fig, ax = plt.subplots(figsize=((12, 8)))
+        # ax.bar(bins, means_target, alpha=0.75, width=bins[1]-bins[0], label="target")
+        # ax.bar(bins, means_ens, alpha=0.75, width=bins[1]-bins[0], label="ens")
+        # ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$', title='nrmse = %.5f'%error)
+        # ax.legend()
+        # plt.savefig("plots/lorenz_test_dist_%s.png"%neuron_type)
 
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=((12, 4)))
         ax1.plot(target[:,0], target[:,1], linestyle="--", linewidth=0.25, label='target')
@@ -293,6 +271,7 @@ def run(n_neurons=2000, neuron_type=nengo.LIF(), t_train=50, t_supv=1, t=200, f=
         plt.savefig("plots/lorenz_test_%s_3D_%s.png"%(n, neuron_type))
         plt.close()
         
+        np.savez("data/xhat_lorenz_%s.npz"%neuron_type, xhat_ens=xhat_ens, target=target)
         del(A_ens)
         del(xhat_ens)
         del(target)
@@ -303,10 +282,10 @@ def run(n_neurons=2000, neuron_type=nengo.LIF(), t_train=50, t_supv=1, t=200, f=
     print('confidence intervals: ', sns.utils.ci(nrmses))
     np.savez('data/nrmses_lorenz_%s.npz'%neuron_type, nrmses=nrmses, mean=np.mean(nrmses), CI=sns.utils.ci(nrmses))
 
-run(neuron_type=nengo.LIF(), n_neurons=5000, n_tests=1, dt_sample=0.001, dt=0.0001, t_train=100, t=100)
+run(neuron_type=nengo.SpikingRectifiedLinear(), r=40, smooth=90, NEF=True)
 
-# run(neuron_type=nengo.LIF(), n_neurons=6000, n_tests=1, load_fd="data/fd_lorenz_LIF().npz")
+# run(neuron_type=nengo.LIF())#, load_fd="data/fd_lorenz_LIF().npz")
 
-# run(neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), n_neurons=5000, n_tests=1)
+# run(neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1))#, load_fd="data/fd_lorenz_AdaptiveLIFT().npz")
 
-
+# run(neuron_type=WilsonEuler(), dt=0.001)#, load_fd="data/fd_lorenz_WilsonEuler().npz")

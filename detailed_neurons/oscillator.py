@@ -215,6 +215,7 @@ def run(n_neurons=200, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, dt_sample=0.0
             np.savez('data/gb_oscillator.npz', g=g, b=b)
 
     # Run many short trials to generate training data for decoders and filters without large drift.
+    # NOTE: ALIF/Wilson needs to have startup transients discarded before optimizing filters/decoders
     if load_fd:
         load = np.load(load_fd)
         d_lif = load['d_lif']
@@ -238,8 +239,8 @@ def run(n_neurons=200, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, dt_sample=0.0
         if df_evals:
             print('optimizing filters and decoders')
             d_lif, f_lif, taus_lif = df_opt(
-                data['x'][::int(dt_sample/dt)][int(t_transient_train/dt_sample):],
-                downsample_spikes(data['lif'], dt=dt, dt_sample=dt_sample)[int(t_transient_train/dt_sample):],
+                data['x'][::int(dt_sample/dt)],
+                downsample_spikes(data['lif'], dt=dt, dt_sample=dt_sample),
                 f, order=order, df_evals=df_evals, dt=dt_sample, name='oscillator_lif')
             d_alif, f_alif, taus_alif = df_opt(
                 data['x'][::int(dt_sample/dt)][int(t_transient_train/dt_sample):],
@@ -249,28 +250,10 @@ def run(n_neurons=200, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, dt_sample=0.0
                 data['x'][::int(dt_sample/dt)][int(t_transient_train/dt_sample):],
                 downsample_spikes(data['wilson'], dt=dt, dt_sample=dt_sample)[int(t_transient_train/dt_sample):],
                 f, order=order, df_evals=df_evals, dt=dt_sample, name='oscillator_wilson')
-            # NOTE: durstewitz neurons need startup transient data for propper training
             d_durstewitz, f_durstewitz, taus_durstewitz = df_opt(
                 data['x'][::int(dt_sample/dt)],
                 downsample_spikes(data['durstewitz'], dt=dt, dt_sample=dt_sample),
                 f, order=order, df_evals=df_evals, dt=dt_sample, name='oscillator_durstewitz')
-        else:
-            d_lif = d_opt(
-                data['x'][::int(dt_sample/dt)][int(t_transient_train/dt_sample):],
-                downsample_spikes(data['lif'], dt=dt, dt_sample=dt_sample)[int(t_transient_train/dt_sample):],
-                f_lif, f, dt=dt_sample)
-            d_alif = d_opt(
-                data['x'][::int(dt_sample/dt)][int(t_transient_train/dt_sample):],
-                downsample_spikes(data['alif'], dt=dt, dt_sample=dt_sample)[int(t_transient_train/dt_sample):],
-                f_alif, f, dt=dt_sample)
-            d_wilson = d_opt(
-                data['x'][::int(dt_sample/dt)][int(t_transient_train/dt_sample):],
-                downsample_spikes(data['wilson'], dt=dt, dt_sample=dt_sample)[int(t_transient_train/dt_sample):],
-                f_wilson, f, dt=dt_sample)
-            d_durstewitz = d_opt(
-                data['x'],
-                downsample_spikes(data['durstewitz'], dt=dt, dt_sample=dt_sample),
-                f_durstewitz, f, dt=dt_sample)
 
         np.savez('data/fd_oscillator.npz',
             d_lif=d_lif,
@@ -472,5 +455,5 @@ def run(n_neurons=200, t_train=10, t=10, f=Lowpass(0.1), dt=0.001, dt_sample=0.0
     plt.legend(loc='upper right')
     plt.savefig("plots/oscillator_states_test.png")
 
-run(n_neurons=100, t_train=10, t=10, t_transient_train=2.5, t_transient_test=5, order=2, gb_evals=0, df_evals=100, dt=0.000025)
-  # load_gb="data/gb_oscillator.npz", load_fd="data/fd_oscillator.npz")
+run(n_neurons=100, t_train=10, t=10, t_transient_train=2.5, t_transient_test=2.5, order=2, gb_evals=0, df_evals=100, dt=0.000025)
+    # load_fd="data/fd_oscillator.npz")

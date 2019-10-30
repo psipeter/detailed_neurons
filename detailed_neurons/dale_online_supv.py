@@ -2,6 +2,7 @@ import nengo
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import nengolib
 sns.set(style='white', palette='dark')
 
 class LearningNode(nengo.Node):
@@ -62,7 +63,7 @@ def feedforward():
 	w_I = np.zeros((N_I, N_ens))
 
 	with nengo.Network(seed=seed) as network:
-		u = nengo.Node(lambda t: np.sin(t))
+		u = nengo.Node(nengo.processes.WhiteSignal(period=200, high=1, rms=0.4, seed=0))
 		x = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
 		node = LearningNode(N_E, N_I, N_ens, w_E, w_I)
 
@@ -83,8 +84,8 @@ def feedforward():
 		nengo.Connection(post.neurons, node[N_E+N_I: N_E+N_I+N_ens], synapse=0.05)
 		nengo.Connection(supv.neurons, node[N_E+N_I+N_ens:N_E+N_I+N_ens+N_ens], synapse=0.05)
 		nengo.Connection(node, post.neurons, synapse=None)
-		conn = nengo.Connection(post, error, synapse=0.05, function=lambda x: 0, learning_rule_type=nengo.PES(learning_rate=1e-5))
-		nengo.Connection(supv, error, synapse=0.05, transform=-1)
+		conn = nengo.Connection(post, error, synapse=0.05, function=lambda x: 0, learning_rule_type=nengo.PES(learning_rate=3e-5))
+		nengo.Connection(x, error, synapse=0.15, transform=-1)
 		nengo.Connection(error, conn.learning_rule)
 
 		p_E = nengo.Probe(E, synapse=0.05)
@@ -92,7 +93,7 @@ def feedforward():
 		p_post_neurons = nengo.Probe(post.neurons, synapse=0.05)
 		p_supv = nengo.Probe(supv, synapse=0.05)
 		p_supv_neurons = nengo.Probe(supv.neurons, synapse=0.05)
-		p_x = nengo.Probe(x, synapse=0.05)
+		p_x = nengo.Probe(x, synapse=0.15)
 		p_error = nengo.Probe(error, synapse=0.05)
 		p_weights = nengo.Probe(conn, 'weights', synapse=None)
 
@@ -122,9 +123,10 @@ def feedforward():
 	w_E = node.w_E
 	w_I = node.w_I
 	d_post = sim.data[p_weights][-1].T
+	np.savez("data/dale_online_supv_feedforward.npz", w_E=w_E, w_I=w_I, d_post=d_post)
 
 	with nengo.Network(seed=seed) as network:
-		u = nengo.Node(lambda t: np.sin(t))
+		u = nengo.Node(nengo.processes.WhiteSignal(period=200, high=1, rms=0.4, seed=1))
 		x = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
 
 		pre = nengo.Ensemble(N_E, 1, seed=seed)
@@ -145,18 +147,20 @@ def feedforward():
 		p_I = nengo.Probe(I, synapse=0.05)
 		p_post = nengo.Probe(post, synapse=0.05, solver=nengo.solvers.NoSolver(d_post))
 		p_supv = nengo.Probe(supv, synapse=0.05)
-		p_x = nengo.Probe(x, synapse=0.05)
+		p_x = nengo.Probe(x, synapse=0.15)
 		p_post_neurons = nengo.Probe(post.neurons, synapse=0.05)
 		p_supv_neurons = nengo.Probe(supv.neurons, synapse=0.05)
 
 	with nengo.Simulator(network, seed=seed) as sim:
-		sim.run(10)
+		sim.run(20)
 
+	nrmse_post = nengolib.signal.nrmse(sim.data[p_post], target=sim.data[p_x])
+	nrmse_supv = nengolib.signal.nrmse(sim.data[p_supv], target=sim.data[p_x])
 	fig, (ax, ax2, ax3) = plt.subplots(3, 1, figsize=((12, 12)), sharex=True)
 	# ax.plot(sim.trange(), sim.data[p_E], alpha=0.5, label='E')
 	# ax.plot(sim.trange(), sim.data[p_I], alpha=0.5, label='I')
-	ax.plot(sim.trange(), sim.data[p_post], alpha=0.5, label='post')
-	ax.plot(sim.trange(), sim.data[p_supv], alpha=0.5, label='supv')
+	ax.plot(sim.trange(), sim.data[p_post], alpha=0.5, label='post, NRMSE=%.3f'%nrmse_post)
+	ax.plot(sim.trange(), sim.data[p_supv], alpha=0.5, label='supv, NRMSE=%.3f'%nrmse_supv)
 	ax.plot(sim.trange(), sim.data[p_x], alpha=0.5, label='target')
 	ax.legend(loc='upper right')
 	for n in range(N_ens):
@@ -179,7 +183,9 @@ def multiply():
 	w_I = np.zeros((N_I, N_ens))
 
 	with nengo.Network(seed=seed) as network:
-		u = nengo.Node(lambda t: [np.sin(t), np.cos(3*t)])
+		u1 = nengo.Node(nengo.processes.WhiteSignal(period=500, high=1, rms=0.8, seed=0))
+		u2 = nengo.Node(nengo.processes.WhiteSignal(period=500, high=1, rms=0.8, seed=1))
+		u = nengo.Ensemble(1, 2, neuron_type=nengo.Direct())
 		x = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
 		node = LearningNode(N_E, N_I, N_ens, w_E, w_I)
 
@@ -187,9 +193,11 @@ def multiply():
 		E = nengo.Ensemble(N_E, 2, max_rates=nengo.dists.Uniform(100, 200), seed=seed)
 		I = nengo.Ensemble(N_I, 2, max_rates=nengo.dists.Uniform(200, 400), seed=seed)
 		post = nengo.Ensemble(N_ens, 1, gain=a, bias=b, seed=seed)
-		supv = nengo.Ensemble(N_ens, 1, max_rates=nengo.dists.Uniform(100, 200), seed=seed)
+		supv = nengo.Ensemble(N_ens, 1, max_rates=nengo.dists.Uniform(100, 200), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
 		error = nengo.Ensemble(N_E, 1, seed=seed)
 
+		nengo.Connection(u1, u[0], synapse=None, seed=seed)
+		nengo.Connection(u2, u[1], synapse=None, seed=seed)
 		nengo.Connection(u, x, synapse=None, seed=seed, function=lambda x: x[0]*x[1])
 		nengo.Connection(x, supv, synapse=0.1, seed=seed)
 		nengo.Connection(u, pre, synapse=None, seed=seed)
@@ -200,8 +208,8 @@ def multiply():
 		nengo.Connection(post.neurons, node[N_E+N_I: N_E+N_I+N_ens], synapse=0.05)
 		nengo.Connection(supv.neurons, node[N_E+N_I+N_ens:N_E+N_I+N_ens+N_ens], synapse=0.05)
 		nengo.Connection(node, post.neurons, synapse=None)
-		conn = nengo.Connection(post, error, synapse=0.05, function=lambda x: 0, learning_rule_type=nengo.PES(learning_rate=1e-5))
-		nengo.Connection(supv, error, synapse=0.05, transform=-1)
+		conn = nengo.Connection(post, error, synapse=0.05, function=lambda x: 0, learning_rule_type=nengo.PES(learning_rate=3e-5))
+		nengo.Connection(x, error, synapse=0.15, transform=-1)
 		nengo.Connection(error, conn.learning_rule)
 
 		p_E = nengo.Probe(E, synapse=0.05)
@@ -209,7 +217,7 @@ def multiply():
 		p_post_neurons = nengo.Probe(post.neurons, synapse=0.05)
 		p_supv = nengo.Probe(supv, synapse=0.05)
 		p_supv_neurons = nengo.Probe(supv.neurons, synapse=0.05)
-		p_x = nengo.Probe(x, synapse=0.05)
+		p_x = nengo.Probe(x, synapse=0.15)
 		p_error = nengo.Probe(error, synapse=0.05)
 		p_weights = nengo.Probe(conn, 'weights', synapse=None)
 
@@ -225,7 +233,7 @@ def multiply():
 	# ax.plot(sim.trange(), sim.data[p_I], alpha=0.5, label='I')
 	ax.plot(sim.trange(), xhat_post, alpha=0.5, label='post')
 	ax.plot(sim.trange(), sim.data[p_x], alpha=0.5, label='target')
-	# ax.plot(sim.trange(), sim.data[p_supv], alpha=0.5, label='supv')
+	ax.plot(sim.trange(), sim.data[p_supv], alpha=0.5, label='supv')
 	# ax.plot(sim.trange(), sim.data[p_error], alpha=0.5, label='error')
 	ax.legend(loc='upper right')
 	for n in range(N_ens):
@@ -239,18 +247,23 @@ def multiply():
 	w_E = node.w_E
 	w_I = node.w_I
 	d_post = sim.data[p_weights][-1].T
+	np.savez("data/dale_online_supv_multiply.npz", w_E=w_E, w_I=w_I, d_post=d_post)
 
 	with nengo.Network(seed=seed) as network:
-		u = nengo.Node(lambda t: np.sin(t))
+		u1 = nengo.Node(nengo.processes.WhiteSignal(period=500, high=1, rms=0.8, seed=2))
+		u2 = nengo.Node(nengo.processes.WhiteSignal(period=500, high=1, rms=0.8, seed=3))
+		u = nengo.Ensemble(1, 2, neuron_type=nengo.Direct())
 		x = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
 
-		pre = nengo.Ensemble(N_E, 1, seed=seed)
-		E = nengo.Ensemble(N_E, 1, max_rates=nengo.dists.Uniform(100, 200), seed=seed)
-		I = nengo.Ensemble(N_I, 1, max_rates=nengo.dists.Uniform(200, 400), seed=seed)
+		pre = nengo.Ensemble(N_E, 2, seed=seed)
+		E = nengo.Ensemble(N_E, 2, max_rates=nengo.dists.Uniform(100, 200), seed=seed)
+		I = nengo.Ensemble(N_I, 2, max_rates=nengo.dists.Uniform(200, 400), seed=seed)
 		post = nengo.Ensemble(N_ens, 1, gain=a, bias=b, seed=seed)
-		supv = nengo.Ensemble(N_ens, 1, max_rates=nengo.dists.Uniform(100, 200), seed=seed)
+		supv = nengo.Ensemble(N_ens, 1, max_rates=nengo.dists.Uniform(100, 200), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
 
-		nengo.Connection(u, x, synapse=None, seed=seed)
+		nengo.Connection(u1, u[0], synapse=None, seed=seed)
+		nengo.Connection(u2, u[1], synapse=None, seed=seed)
+		nengo.Connection(u, x, synapse=None, seed=seed, function=lambda x: x[0]*x[1])
 		nengo.Connection(x, supv, synapse=0.1, seed=seed)
 		nengo.Connection(u, pre, synapse=None, seed=seed)
 		nengo.Connection(pre, E, synapse=0.01, seed=seed)
@@ -262,18 +275,20 @@ def multiply():
 		p_I = nengo.Probe(I, synapse=0.05)
 		p_post = nengo.Probe(post, synapse=0.05, solver=nengo.solvers.NoSolver(d_post))
 		p_supv = nengo.Probe(supv, synapse=0.05)
-		p_x = nengo.Probe(x, synapse=0.05)
+		p_x = nengo.Probe(x, synapse=0.15)
 		p_post_neurons = nengo.Probe(post.neurons, synapse=0.05)
 		p_supv_neurons = nengo.Probe(supv.neurons, synapse=0.05)
 
 	with nengo.Simulator(network, seed=seed) as sim:
-		sim.run(10)
+		sim.run(30)
 
+	nrmse_post = nengolib.signal.nrmse(sim.data[p_post], target=sim.data[p_x])
+	nrmse_supv = nengolib.signal.nrmse(sim.data[p_supv], target=sim.data[p_x])
 	fig, (ax, ax2, ax3) = plt.subplots(3, 1, figsize=((12, 12)), sharex=True)
 	# ax.plot(sim.trange(), sim.data[p_E], alpha=0.5, label='E')
 	# ax.plot(sim.trange(), sim.data[p_I], alpha=0.5, label='I')
-	ax.plot(sim.trange(), sim.data[p_post], alpha=0.5, label='post')
-	ax.plot(sim.trange(), sim.data[p_supv], alpha=0.5, label='supv')
+	ax.plot(sim.trange(), sim.data[p_post], alpha=0.5, label='post, NRMSE=%.3f'%nrmse_post)
+	ax.plot(sim.trange(), sim.data[p_supv], alpha=0.5, label='supv, NRMSE=%.3f'%nrmse_supv)
 	ax.plot(sim.trange(), sim.data[p_x], alpha=0.5, label='target')
 	ax.legend(loc='upper right')
 	for n in range(N_ens):
@@ -284,4 +299,5 @@ def multiply():
 	ax3.set(ylabel='Firing Rate', ylim=((0, 400)), title='post')
 	plt.show()
 
-feedforward()
+# feedforward()
+multiply()

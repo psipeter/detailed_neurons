@@ -6,7 +6,7 @@ import nengolib
 sns.set(style='white', palette='dark')
 
 class LearningNode(nengo.Node):
-	def __init__(self, N_E, N_I, N_ens, w_E, w_I, k_E_pos=3e-9, k_E_neg=1e-8, k_I_pos=1e-7, k_I_neg=3e-9, seed=0, label=None):
+	def __init__(self, N_E, N_I, N_ens, w_E, w_I, m=10, k_E_pos=3e-9, k_E_neg=1e-8, k_I_pos=1e-7, k_I_neg=3e-9, seed=0):
 		self.N_E = N_E
 		self.N_I = N_I
 		self.N_ens = N_ens
@@ -18,7 +18,7 @@ class LearningNode(nengo.Node):
 		self.k_I_neg = k_I_neg
 		self.w_E = w_E
 		self.w_I = w_I
-		self.label = label
+		self.m = m
 		self.rng = np.random.RandomState(seed=seed)
 		super(LearningNode, self).__init__(
 			self.step, size_in=self.size_in, size_out=self.size_out)
@@ -26,31 +26,32 @@ class LearningNode(nengo.Node):
 	def step(self, t, x):
 		a_E = x[:self.N_E]
 		a_I = x[self.N_E: self.N_E+self.N_I]
-		idx_post = self.rng.randint(0, self.N_ens)
-		a_post = x[self.N_E+self.N_I+idx_post]
-		a_supv = x[self.N_E+self.N_I+self.N_ens+idx_post]
-		delta_a = a_post - a_supv
-		active_E = np.where(a_E > 0)[0]
-		if len(active_E) > 0:
-			idx_pre_E = self.rng.randint(0, len(active_E))
-			if delta_a < 0:  # if underactive, increase weight from active E neuron (more positive)
-				self.w_E[idx_pre_E, idx_post] += delta_a * -self.k_E_pos * a_E[idx_pre_E]
-			if delta_a > 0:  # if overactive, decrease weight from active E neuron (less positive)
-				self.w_E[idx_pre_E, idx_post] += delta_a * -self.k_E_neg * a_E[idx_pre_E]
-			self.w_E[idx_pre_E, idx_post] = np.maximum(0, self.w_E[idx_pre_E, idx_post])
-		active_I = np.where(a_I > 0)[0]
-		if len(active_I) > 0:
-			idx_pre_I = self.rng.randint(0, len(active_I))
-			if delta_a > 0:  # if overactive, decrease weight from active I neuron (more negative)
-				self.w_I[idx_pre_I, idx_post] += delta_a * -self.k_I_pos
-			if delta_a < 0:  # if underactive, increase weight from active I neuron (less negative)
-				self.w_I[idx_pre_I, idx_post] += delta_a * -self.k_I_neg
-			self.w_I[idx_pre_I, idx_post] = np.minimum(0, self.w_I[idx_pre_I, idx_post])
-		assert np.sum(self.w_E >= 0) == self.N_E * self.N_ens
-		assert np.sum(self.w_I <= 0) == self.N_I * self.N_ens
-		J_E = np.dot(a_E, self.w_E)
-		J_I = np.dot(a_I, self.w_I)
-		return J_E + J_I
+		for _ in range(self.m):
+			idx_post = self.rng.randint(0, self.N_ens)
+			a_post = x[self.N_E+self.N_I+idx_post]
+			a_supv = x[self.N_E+self.N_I+self.N_ens+idx_post]
+			delta_a = a_post - a_supv
+			active_E = np.where(a_E > 0)[0]
+			if len(active_E) > 0:
+				idx_pre_E = self.rng.randint(0, len(active_E))
+				if delta_a < 0:  # if underactive, increase weight from active E neuron (more positive)
+					self.w_E[idx_pre_E, idx_post] += delta_a * -self.k_E_pos * a_E[idx_pre_E]
+				if delta_a > 0:  # if overactive, decrease weight from active E neuron (less positive)
+					self.w_E[idx_pre_E, idx_post] += delta_a * -self.k_E_neg * a_E[idx_pre_E]
+				self.w_E[idx_pre_E, idx_post] = np.maximum(0, self.w_E[idx_pre_E, idx_post])
+			active_I = np.where(a_I > 0)[0]
+			if len(active_I) > 0:
+				idx_pre_I = self.rng.randint(0, len(active_I))
+				if delta_a > 0:  # if overactive, decrease weight from active I neuron (more negative)
+					self.w_I[idx_pre_I, idx_post] += delta_a * -self.k_I_pos
+				if delta_a < 0:  # if underactive, increase weight from active I neuron (less negative)
+					self.w_I[idx_pre_I, idx_post] += delta_a * -self.k_I_neg
+				self.w_I[idx_pre_I, idx_post] = np.minimum(0, self.w_I[idx_pre_I, idx_post])
+			assert np.sum(self.w_E >= 0) == self.N_E * self.N_ens
+			assert np.sum(self.w_I <= 0) == self.N_I * self.N_ens
+			J_E = np.dot(a_E, self.w_E)
+			J_I = np.dot(a_I, self.w_I)
+			return J_E + J_I
 
 def feedforward():
 	'''train'''
@@ -223,7 +224,7 @@ def multiply():
 		p_weights = nengo.Probe(conn, 'weights', synapse=None)
 
 	with nengo.Simulator(network, seed=seed) as sim:
-		sim.run(600)
+		sim.run(300)
 
 
 	xhat_post = np.zeros((sim.trange().shape[0], 1))
@@ -318,12 +319,11 @@ def integrate():
 
 	with nengo.Network(seed=seed) as network:
 		# nodes
-		u = nengo.Node(nengo.processes.WhiteSignal(period=50, high=1, rms=0.3, seed=3))
-		# u = nengo.Node(lambda t: np.sin(t))
+		u = nengo.Node(nengo.processes.WhiteSignal(period=50, high=1, rms=0.5, seed=3))
 		x = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
 		node_post = LearningNode(N_E, N_I, N_post, w_E, w_I)
-		node_E = LearningNode(N_E, N_I, N_E, w_EE, w_IE)
-		# node_I = LearningNode(N_E, N_I, N_I, w_EI, w_II)
+		node_E = LearningNode(N_E, N_I, N_E, w_EE, w_IE, k_E_pos=3e-9, k_E_neg=3e-8, k_I_pos=1e-7, k_I_neg=1e-9, m=10)
+		node_I = LearningNode(N_E, N_I, N_I, w_EI, w_II, k_E_pos=3e-9, k_E_neg=3e-8, k_I_pos=1e-8, k_I_neg=1e-10, m=40)
 
 		# ensembles
 		pre_u = nengo.Ensemble(100, 1, seed=seed)
@@ -334,7 +334,7 @@ def integrate():
 		supv_post = nengo.Ensemble(N_post, 1, max_rates=nengo.dists.Uniform(100, 200), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
 		error_post = nengo.Ensemble(100, 1, seed=seed)
 		supv_E = nengo.Ensemble(N_E, 1, max_rates=nengo.dists.Uniform(100, 200), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
-		# supv_I = nengo.Ensemble(N_I, 1, max_rates=nengo.dists.Uniform(200, 400), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
+		supv_I = nengo.Ensemble(N_I, 1, max_rates=nengo.dists.Uniform(200, 400), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
 
 		# input and supervised connections
 		nengo.Connection(u, x, synapse=1/nengolib.signal.s, seed=seed)
@@ -343,10 +343,10 @@ def integrate():
 		nengo.Connection(pre_u, E, synapse=0.1, seed=seed)
 		nengo.Connection(pre_u, I, synapse=0.1, seed=seed)
 		nengo.Connection(pre_x, supv_post, synapse=0.1, seed=seed)
-		nengo.Connection(pre_u, supv_E, synapse=0.1, seed=seed)
+		# nengo.Connection(pre_u, supv_E, synapse=0.1, seed=seed)
 		nengo.Connection(pre_x, supv_E, synapse=0.1, seed=seed)
 		# nengo.Connection(pre_u, supv_I, synapse=0.1, seed=seed)
-		# nengo.Connection(pre_x, supv_I, synapse=0.1, seed=seed)
+		nengo.Connection(pre_x, supv_I, synapse=0.1, seed=seed)
 
 		# connections into E
 		nengo.Connection(E.neurons, node_E[0:N_E], synapse=0.2)
@@ -356,11 +356,11 @@ def integrate():
 		nengo.Connection(node_E, E.neurons, synapse=None)
 
 		# connections into I
-		# nengo.Connection(E.neurons, node_I[0:N_E], synapse=0.2)
-		# nengo.Connection(I.neurons, node_I[N_E: N_E+N_I], synapse=0.01)
-		# nengo.Connection(I.neurons, node_I[N_E+N_I: N_E+N_I+N_I], synapse=0.05)
-		# nengo.Connection(supv_I.neurons, node_I[N_E+N_I+N_I: N_E+N_I+N_I+N_I], synapse=0.05)
-		# nengo.Connection(node_I, I.neurons, synapse=None)
+		nengo.Connection(E.neurons, node_I[0:N_E], synapse=0.2)
+		nengo.Connection(I.neurons, node_I[N_E: N_E+N_I], synapse=0.01)
+		nengo.Connection(I.neurons, node_I[N_E+N_I: N_E+N_I+N_I], synapse=0.05)
+		nengo.Connection(supv_I.neurons, node_I[N_E+N_I+N_I: N_E+N_I+N_I+N_I], synapse=0.05)
+		nengo.Connection(node_I, I.neurons, synapse=None)
 
 		# connections into post
 		nengo.Connection(E.neurons, node_post[0:N_E], synapse=0.005)
@@ -381,50 +381,54 @@ def integrate():
 		p_post_neurons = nengo.Probe(post.neurons, synapse=0.05)
 		p_supv_E = nengo.Probe(supv_E, synapse=0.05)
 		p_supv_E_neurons = nengo.Probe(supv_E.neurons, synapse=0.05)
-		# p_supv_I = nengo.Probe(supv_I, synapse=0.05)
-		# p_supv_I_neurons = nengo.Probe(supv_I.neurons, synapse=0.05)
+		p_supv_I = nengo.Probe(supv_I, synapse=0.05)
+		p_supv_I_neurons = nengo.Probe(supv_I.neurons, synapse=0.05)
 		p_supv_post = nengo.Probe(supv_post, synapse=0.05)
 		p_supv_post_neurons = nengo.Probe(supv_post.neurons, synapse=0.05)
 		p_x = nengo.Probe(x, synapse=0.15)
 		p_weights = nengo.Probe(conn, 'weights', synapse=None)
 
 	with nengo.Simulator(network, seed=seed) as sim:
-		sim.run(100)
+		sim.run(200)
 
-	fig, (ax, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6, 1, figsize=((18, 18)), sharex=True)
-	for n in range(5):
-		ax.plot(sim.trange(), sim.data[p_supv_E_neurons][:,n], alpha=0.5)
-		ax2.plot(sim.trange(), sim.data[p_E_neurons][:,n], alpha=0.5)
-		# ax3.plot(sim.trange(), sim.data[p_supv_I_neurons][:,n], alpha=0.5)
-		# ax4.plot(sim.trange(), sim.data[p_I_neurons][:,n], alpha=0.5)
-		ax5.plot(sim.trange(), sim.data[p_supv_post_neurons][:,n], alpha=0.5)
-		ax6.plot(sim.trange(), sim.data[p_post_neurons][:,n], alpha=0.5)
-	ax.set(ylabel='Firing Rate', ylim=((0, 200)), title='supv_E')
-	ax2.set(ylabel='Firing Rate', ylim=((0, 200)), title='E')
-	ax3.set(ylabel='Firing Rate', ylim=((0, 200)), title='supv_I')
-	ax4.set(ylabel='Firing Rate', ylim=((0, 200)), title='I')
-	ax5.set(ylabel='Firing Rate', ylim=((0, 200)), title='supv_post')
-	ax6.set(ylabel='Firing Rate', ylim=((0, 200)), title='post')
+	T = 50000
+	for chunk in range(int(sim.trange().shape[0]/T)):
+		fig, (ax, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6, 1, figsize=((18, 18)), sharex=True)
+		for n in range(5):
+			ax.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_supv_E_neurons][chunk*T: (chunk+1)*T:,n], alpha=0.5)
+			ax2.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_E_neurons][chunk*T: (chunk+1)*T:,n], alpha=0.5)
+			ax3.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_supv_I_neurons][chunk*T: (chunk+1)*T,n], alpha=0.5)
+			ax4.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_I_neurons][chunk*T: (chunk+1)*T,n], alpha=0.5)
+			ax5.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_supv_post_neurons][chunk*T: (chunk+1)*T:,n], alpha=0.5)
+			ax6.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_post_neurons][chunk*T: (chunk+1)*T:,n], alpha=0.5)
+		ax.set(ylabel='Firing Rate', ylim=((0, 200)), title='supv_E')
+		ax2.set(ylabel='Firing Rate', ylim=((0, 200)), title='E')
+		ax3.set(ylabel='Firing Rate', ylim=((0, 200)), title='supv_I')
+		ax4.set(ylabel='Firing Rate', ylim=((0, 200)), title='I')
+		ax5.set(ylabel='Firing Rate', ylim=((0, 200)), title='supv_post')
+		ax6.set(ylabel='Firing Rate', ylim=((0, 200)), title='post')
+		plt.savefig('plots/dale_online_supv_integrate_train_rates_%s'%chunk)
 
-	nrmse_post = nengolib.signal.nrmse(sim.data[p_post], target=sim.data[p_x])
-	nrmse_supv = nengolib.signal.nrmse(sim.data[p_supv_post], target=sim.data[p_x])
-	fig, ax = plt.subplots(1, 1, figsize=((12, 12)), sharex=True)
-	ax.plot(sim.trange(), sim.data[p_post], alpha=0.5, label='post, NRMSE=%.3f'%nrmse_post)
-	ax.plot(sim.trange(), sim.data[p_supv_post], alpha=0.5, label='supv, NRMSE=%.3f'%nrmse_supv)
-	ax.plot(sim.trange(), sim.data[p_x], alpha=0.5, label='target')
-	ax.legend(loc='upper right')
-	ax.set(ylim=((-1, 1)), xlabel=r"$\mathbf{x}$", title='train')
-	plt.show()
+		nrmse_post = nengolib.signal.nrmse(sim.data[p_post][chunk*T: (chunk+1)*T], target=sim.data[p_x][chunk*T: (chunk+1)*T])
+		nrmse_supv = nengolib.signal.nrmse(sim.data[p_supv_post][chunk*T: (chunk+1)*T], target=sim.data[p_x][chunk*T: (chunk+1)*T])
+		fig, ax = plt.subplots(1, 1, figsize=((12, 12)), sharex=True)
+		ax.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_post][chunk*T: (chunk+1)*T], alpha=0.5, label='post, NRMSE=%.3f'%nrmse_post)
+		ax.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_supv_post][chunk*T: (chunk+1)*T], alpha=0.5, label='supv, NRMSE=%.3f'%nrmse_supv)
+		ax.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_x][chunk*T: (chunk+1)*T], alpha=0.5, label='target')
+		ax.legend(loc='upper right')
+		ax.set(ylim=((-1, 1)), xlabel=r"$\mathbf{x}$", title='train')
+		plt.savefig('plots/dale_online_supv_integrate_train_values_%s'%chunk)
+	# plt.show()
 
 	'''test'''
-	# w_E = node_post.w_E
-	# w_I = node_post.w_I
-	# w_EE = node_E.w_E
-	# w_EI = node_I.w_E
-	# w_IE = node_E.w_I
-	# w_II = node_I.w_I
-	# d_post = sim.data[p_weights][-1].T
-	# np.savez("data/dale_online_supv_integrate.npz", w_E=w_E, w_I=w_I, w_EE=w_EE, w_EI=w_EI, w_IE=w_IE, w_II=w_II, d_post=d_post)
+	w_E = node_post.w_E
+	w_I = node_post.w_I
+	w_EE = node_E.w_E
+	w_EI = node_I.w_E
+	w_IE = node_E.w_I
+	w_II = node_I.w_I
+	d_post = sim.data[p_weights][-1].T
+	np.savez("data/dale_online_supv_integrate.npz", w_E=w_E, w_I=w_I, w_EE=w_EE, w_EI=w_EI, w_IE=w_IE, w_II=w_II, d_post=d_post)
 
 	# with nengo.Network(seed=seed) as network:
 	# 	u = nengo.Node(nengo.processes.WhiteSignal(period=30, high=1, rms=0.1, seed=4))
@@ -502,7 +506,94 @@ def integrate():
 	# plt.savefig("plots/dale_online_supv_integrate.png")
 	# plt.show()
 
+def integrate_2stage():
+	'''train'''
+	N_E = 100
+	N_I = 400
+	seed = 1
+	a_E = nengo.dists.Uniform(1, 10).sample(n=N_E, rng=np.random.RandomState(seed=seed))
+	a_I = nengo.dists.Uniform(1, 10).sample(n=N_I, rng=np.random.RandomState(seed=seed))
+	b_E = np.zeros((N_E))
+	b_I = np.zeros((N_I))
+	w_EE = np.zeros((N_E, N_E))
+	w_EI = np.zeros((N_E, N_I))
+	w_IE = np.zeros((N_I, N_E))
+	w_II = np.zeros((N_I, N_I))
+
+	with nengo.Network(seed=seed) as network:
+		# nodes
+		u = nengo.Node(nengo.processes.WhiteSignal(period=50, high=1, rms=0.5, seed=3))
+		x = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
+		node_E = LearningNode(N_E, N_I, N_E, w_EE, w_IE, k_E_pos=3e-9, k_E_neg=1e-8, k_I_pos=1e-7, k_I_neg=3e-9, m=100)
+		node_I = LearningNode(N_E, N_I, N_I, w_EI, w_II, k_E_pos=3e-9, k_E_neg=1e-8, k_I_pos=1e-7, k_I_neg=3e-9, m=400)
+
+		# ensembles
+		pre_u = nengo.Ensemble(100, 1, seed=seed)
+		pre_x = nengo.Ensemble(100, 1, seed=seed)
+		E = nengo.Ensemble(N_E, 1, max_rates=nengo.dists.Uniform(100, 200), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
+		I = nengo.Ensemble(N_I, 1, max_rates=nengo.dists.Uniform(200, 400), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
+		post_E = nengo.Ensemble(N_E, 1, gain=a_E, bias=b_E, seed=seed)
+		post_I = nengo.Ensemble(N_I, 1, gain=a_I, bias=b_I, seed=seed)
+		supv_E = nengo.Ensemble(N_E, 1, max_rates=nengo.dists.Uniform(100, 200), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
+		supv_I = nengo.Ensemble(N_I, 1, max_rates=nengo.dists.Uniform(200, 400), intercepts=nengo.dists.Uniform(-0.8, 0.8), seed=seed)
+
+		# input and supervised connections
+		nengo.Connection(u, x, synapse=1/nengolib.signal.s, seed=seed)
+		nengo.Connection(u, pre_u, synapse=None, seed=seed)
+		nengo.Connection(x, pre_x, synapse=None, seed=seed)
+		nengo.Connection(pre_u, E, synapse=0.1, seed=seed)
+		nengo.Connection(pre_u, I, synapse=0.1, seed=seed)
+		nengo.Connection(pre_x, supv_E, synapse=0.1, seed=seed)
+		nengo.Connection(pre_x, supv_I, synapse=0.1, seed=seed)
+
+		# connections into post_E
+		nengo.Connection(E.neurons, node_E[0:N_E], synapse=0.2)
+		nengo.Connection(I.neurons, node_E[N_E: N_E+N_I], synapse=0.01)
+		nengo.Connection(post_E.neurons, node_E[N_E+N_I: N_E+N_I+N_E], synapse=0.05)
+		nengo.Connection(supv_E.neurons, node_E[N_E+N_I+N_E: N_E+N_I+N_E+N_E], synapse=0.05)
+		nengo.Connection(node_E, post_E.neurons, synapse=None)
+
+		# connections into post_I
+		nengo.Connection(E.neurons, node_I[0:N_E], synapse=0.2)
+		nengo.Connection(I.neurons, node_I[N_E: N_E+N_I], synapse=0.01)
+		nengo.Connection(post_I.neurons, node_I[N_E+N_I: N_E+N_I+N_I], synapse=0.05)
+		nengo.Connection(supv_I.neurons, node_I[N_E+N_I+N_I: N_E+N_I+N_I+N_I], synapse=0.05)
+		nengo.Connection(node_I, post_I.neurons, synapse=None)
+
+		# probes
+		p_post_E_neurons = nengo.Probe(post_E.neurons, synapse=0.05)
+		p_post_I_neurons = nengo.Probe(post_I.neurons, synapse=0.05)
+		p_supv_E_neurons = nengo.Probe(supv_E.neurons, synapse=0.05)
+		p_supv_I_neurons = nengo.Probe(supv_I.neurons, synapse=0.05)
+		p_x = nengo.Probe(x, synapse=0.15)
+
+	with nengo.Simulator(network, seed=seed) as sim:
+		sim.run(2000)	
+
+	T = 50000
+	for chunk in range(int(sim.trange().shape[0]/T)):
+		fig, (ax, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=((12, 12)), sharex=True)
+		for n in range(5):
+			ax.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_supv_E_neurons][chunk*T: (chunk+1)*T:,n], alpha=0.5)
+			ax2.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_post_E_neurons][chunk*T: (chunk+1)*T:,n], alpha=0.5)
+			ax3.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_supv_I_neurons][chunk*T: (chunk+1)*T,n], alpha=0.5)
+			ax4.plot(sim.trange()[chunk*T: (chunk+1)*T], sim.data[p_post_I_neurons][chunk*T: (chunk+1)*T,n], alpha=0.5)
+		ax.set(ylabel='Firing Rate', ylim=((0, 200)), title='supv_E')
+		ax2.set(ylabel='Firing Rate', ylim=((0, 200)), title='post_E')
+		ax3.set(ylabel='Firing Rate', ylim=((0, 200)), title='supv_I')
+		ax4.set(ylabel='Firing Rate', ylim=((0, 200)), title='post_I')
+		plt.savefig('plots/dale_online_supv_integrate_2stage_train_rates_%s'%chunk)
+	# plt.show()
+
+	'''test'''
+	w_EE = node_E.w_E
+	w_EI = node_I.w_E
+	w_IE = node_E.w_I
+	w_II = node_I.w_I
+	np.savez("data/dale_online_supv_integrate_2stage.npz", w_EE=w_EE, w_EI=w_EI, w_IE=w_IE, w_II=w_II)
+
 
 # feedforward()
 # multiply()
-integrate()
+# integrate()
+integrate_2stage()

@@ -83,8 +83,13 @@ class DownsampleNode(object):
         self.count = (self.count + 1) % self.reset
         return self.output
 
-def df_opt(target, spikes, f, name='default', order=1, df_evals=100, seed=0, dt=0.001, dt_sample=0.001,
-        tau_mins=[1e-3, 1e-4], tau_maxs=[5e-1, 1e-3], reg=1e-1):
+def d_opt(target, spikes, h, h_tar, reg=1e-1, dt=0.001):
+    target = h_tar.filt(target, dt=dt)
+    A = h.filt(spikes, dt=dt)
+    d_new = LstsqL2(reg=reg)(A, target)[0]
+    return d_new
+
+def df_opt(target, spikes, f, name='default', order=1, df_evals=100, seed=0, dt=0.001, dt_sample=0.001, tau_mins=[1e-3, 1e-4], tau_maxs=[5e-1, 1e-3], reg=1e-2):
 
     target = f.filt(target, dt=dt)
 #     spk_file = h5py.File('data/%s_spk.h5'%name, 'w')
@@ -103,8 +108,8 @@ def df_opt(target, spikes, f, name='default', order=1, df_evals=100, seed=0, dt=
     hyperparams['order'] = order
     hyperparams['dt'] = dt
     for o in range(order):
-        hyperparams[str(o)] = hp.uniform(str(o), tau_mins[o], tau_maxs[0])
-        hyperparams[str(o)] = hp.loguniform(str(o), np.log10(tau_mins[o]), np.log10(tau_maxs[0]))
+        # hyperparams[str(o)] = hp.uniform(str(o), tau_mins[o], tau_maxs[o])
+        hyperparams[str(o)] = hp.loguniform(str(o), np.log10(tau_mins[o]), np.log10(tau_maxs[o]))
     hyperparams['reg'] = reg
 
     def objective(hyperparams):
@@ -287,7 +292,7 @@ def fit_sinusoid(xhat, times, evals=2000, freq=0.5, dt=0.001, seed=0):
 
 
 class LearningNode(nengo.Node):
-    def __init__(self, N, N_pre, dim, conn, k=5e-2, dt=0.001, learn=True, seed=0):
+    def __init__(self, N, N_pre, dim, conn, k=3e-3, dt=0.001, learn=True, seed=0):
         self.N = N
         self.N_pre = N_pre
         self.dim = dim
@@ -296,6 +301,7 @@ class LearningNode(nengo.Node):
         self.size_out = 0
         self.dt = dt
         self.k = k
+        # self.decay = decay
         self.learn = learn
         self.rng = np.random.RandomState(seed=seed)
         super(LearningNode, self).__init__(
@@ -312,12 +318,13 @@ class LearningNode(nengo.Node):
             for dim in range(self.conn.d.shape[1]):
                 dim_scale = 1 if np.sum(np.abs(u)) == 0 else np.abs(u[dim])/np.sum(np.abs(u))
                 if self.conn.d[pre, dim] >= 0:
-                    delta_e = -self.k * a_pre[pre] * dim_scale
+                    delta_e = -self.k * a_pre[pre] * dim_scale  # * self.decay(t)
                 if self.conn.d[pre, dim] < 0:
                     delta_e = self.k * a_pre[pre] * dim_scale
                 self.conn.e[pre, post, dim] += delta_a * delta_e
             self.conn.weights[pre, post] = np.dot(self.conn.d[pre], self.conn.e[pre, post])
 #                 self.conn.weights[pre, post] += delta_a * -self.k * a_pre[pre]
             self.conn.netcons[pre, post].weight[0] = np.abs(self.conn.weights[pre, post])
+            # print(np.abs(self.conn.weights[pre, post]))
             self.conn.netcons[pre, post].syn().e = 0.0 if self.conn.weights[pre, post] > 0 else -70.0
         return

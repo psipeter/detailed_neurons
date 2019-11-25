@@ -292,11 +292,12 @@ def fit_sinusoid(xhat, times, evals=2000, freq=0.5, dt=0.001, seed=0):
 
 
 class LearningNode(nengo.Node):
-    def __init__(self, N, N_pre, dim, conn, k=3e-3, dt=0.001, learn=True, seed=0):
+    def __init__(self, N, N_pre, dim, conn, k=3e-3, w_max=1e-1, dt=0.001, learn=True, seed=0):
         self.N = N
         self.N_pre = N_pre
         self.dim = dim
         self.conn = conn
+        self.w_max = w_max
         self.size_in = 2*N+N_pre+dim
         self.size_out = 0
         self.dt = dt
@@ -310,11 +311,13 @@ class LearningNode(nengo.Node):
     def step(self, t, x):
         a_pre = x[:self.N_pre]
         a_bio = x[self.N_pre: self.N_pre+self.N]
-        a_lif = x[self.N_pre+self.N:]
+        a_supv = x[self.N_pre+self.N:]
         u = x[-self.dim:]
         pre = self.rng.randint(0, self.conn.weights.shape[0])
         for post in range(self.conn.weights.shape[1]):
-            delta_a = a_bio[post] - a_lif[post]
+            delta_a = a_bio[post] - a_supv[post]
+            if a_bio[post] == 0 or a_supv[post] == 0:
+                delta_a *= 2
             for dim in range(self.conn.d.shape[1]):
                 dim_scale = 1 if np.sum(np.abs(u)) == 0 else np.abs(u[dim])/np.sum(np.abs(u))
                 if self.conn.d[pre, dim] >= 0:
@@ -323,6 +326,10 @@ class LearningNode(nengo.Node):
                     delta_e = self.k * a_pre[pre] * dim_scale
                 self.conn.e[pre, post, dim] += delta_a * delta_e
             self.conn.weights[pre, post] = np.dot(self.conn.d[pre], self.conn.e[pre, post])
+            if self.conn.weights[pre, post] > self.w_max:
+                self.conn.weights[pre, post] = self.w_max
+            if self.conn.weights[pre, post] < -self.w_max:
+                self.conn.weights[pre, post] = -self.w_max
 #                 self.conn.weights[pre, post] += delta_a * -self.k * a_pre[pre]
             self.conn.netcons[pre, post].weight[0] = np.abs(self.conn.weights[pre, post])
             # print(np.abs(self.conn.weights[pre, post]))

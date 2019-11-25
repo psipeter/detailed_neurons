@@ -34,7 +34,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 1), s
         u2 = nengo.Node(stim_func2)
 
         # Ensembles
-        pre = nengo.Ensemble(200, 2, max_rates=m, seed=seed)
+        pre = nengo.Ensemble(300, 2, max_rates=m, seed=seed)
         ens = nengo.Ensemble(n_neurons, 2, max_rates=m, intercepts=i, neuron_type=neuron_type, seed=seed)
         ens2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=neuron_type2, seed=seed+1)
         tar = nengo.Ensemble(1, 2, neuron_type=nengo.Direct())
@@ -54,7 +54,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 1), s
         else:
             conn2 = nengo.Connection(ens.neurons, ens2, synapse=f_ens, seed=seed+1, transform=d_ens.T, label='ens-ens2')
 
-        supv = nengo.Ensemble(n_neurons, 2, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed)
+        supv = nengo.Ensemble(n_neurons, 2, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(), seed=seed)
         nengo.Connection(tar, supv, synapse=None, seed=seed)
         p_supv = nengo.Probe(supv.neurons, synapse=None)
 
@@ -65,13 +65,13 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 1), s
             nengo.Connection(supv.neurons, node[pre.n_neurons+n_neurons: pre.n_neurons+2*n_neurons], synapse=f)
             nengo.Connection(tar, node[-2:], synapse=None)
 
-        supv2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1), seed=seed+1)
+        supv2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=AdaptiveLIFT(), seed=seed+1)
         nengo.Connection(tar_mult, supv2, synapse=f_ens, seed=seed)
         p_supv2 = nengo.Probe(supv2.neurons, synapse=None)
 
         if learn2 and isinstance(neuron_type, DurstewitzNeuron):
             # nengo.Connection(tar2, supv2, synapse=None, seed=seed)
-            node2 = LearningNode(n_neurons, n_neurons, 1, conn2, k=3e-5)
+            node2 = LearningNode(n_neurons, n_neurons, 1, conn2, k=1e-4)
             nengo.Connection(ens.neurons, node2[0:n_neurons], synapse=f_ens)
             nengo.Connection(ens2.neurons, node2[n_neurons:2*n_neurons], synapse=f)
             nengo.Connection(supv2.neurons, node2[2*n_neurons: 3*n_neurons], synapse=f)
@@ -120,7 +120,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 1), s
         w_ens2=conn2.weights if isinstance(neuron_type, DurstewitzNeuron) and hasattr(conn2, 'weights') else None)
 
 
-def run(n_neurons=100, t=10, t_test=10, f=Lowpass(0.01), dt=0.001, n_tests=10, neuron_type=nengo.LIF(),
+def run(n_neurons=100, t=10, t_test=10, t_enc=100, f=Lowpass(0.01), dt=0.001, n_tests=10, neuron_type=nengo.LIF(),
         load_w=None, load_fd=None, learn_w=False, learn_w2=False):
 
     d_ens = np.zeros((n_neurons, 1))
@@ -129,12 +129,12 @@ def run(n_neurons=100, t=10, t_test=10, f=Lowpass(0.01), dt=0.001, n_tests=10, n
     w_ens = np.load(load_w)['w_ens'] if load_w else None
     w_ens2 = np.load(load_w)['w_ens2'] if load_w else None
 #     w_ens2 = None
-    stim_func = nengo.processes.WhiteSignal(period=t, high=1, rms=0.5, seed=0)
-    stim_func2 = nengo.processes.WhiteSignal(period=t, high=1, rms=0.5, seed=1)
+    stim_func = nengo.processes.WhiteSignal(period=t_enc, high=1, rms=0.5, seed=0)
+    stim_func2 = nengo.processes.WhiteSignal(period=t_enc, high=1, rms=0.5, seed=1)
 
     if isinstance(neuron_type, DurstewitzNeuron) and learn_w:
         print('optimizing encoders into DurstewitzNeuron ens')
-        data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, stim_func=stim_func, stim_func2=stim_func2,
+        data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_enc, f=f, dt=dt, stim_func=stim_func, stim_func2=stim_func2,
             neuron_type=neuron_type, w_ens=w_ens, w_ens2=w_ens2, learn=True, half=True)
         w_ens = data['w_ens']
         np.savez('data/w_multiply.npz', w_ens=w_ens)
@@ -202,6 +202,11 @@ def run(n_neurons=100, t=10, t_test=10, f=Lowpass(0.01), dt=0.001, n_tests=10, n
             plt.tight_layout()
             plt.savefig('plots/tuning/multiply_ens1_time_%s.png'%n)
             plt.close()
+            
+        if np.any(w_ens):
+            fig, ax = plt.subplots()
+            sns.distplot(w_ens.ravel())
+            plt.savefig("plots/w_ens_multiply.png")
         
         print('optimizing filters and decoders')
         d_ens_out, f_ens_out, taus_ens_out = df_opt(data['tar'], data['ens'], f, order=2, dt=dt, name='multiply_readout_%s'%neuron_type)
@@ -254,9 +259,9 @@ def run(n_neurons=100, t=10, t_test=10, f=Lowpass(0.01), dt=0.001, n_tests=10, n
 
     if isinstance(neuron_type, DurstewitzNeuron) and learn_w2:
         print('optimizing encoders into DurstewitzNeuron ens2')
-        stim_func = nengo.processes.WhiteSignal(period=t, high=1, rms=0.5, seed=0)
-        stim_func2 = nengo.processes.WhiteSignal(period=t, high=1, rms=0.5, seed=1)
-        data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type,
+        stim_func = nengo.processes.WhiteSignal(period=t_enc, high=1, rms=0.5, seed=0)
+        stim_func2 = nengo.processes.WhiteSignal(period=t_enc, high=1, rms=0.5, seed=1)
+        data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_enc, f=f, dt=dt, neuron_type=neuron_type,
             stim_func=stim_func, stim_func2=stim_func2, w_ens=w_ens, w_ens2=w_ens2, learn2=True)
         w_ens2 = data['w_ens2']
         np.savez('data/w_multiply.npz', w_ens=w_ens, w_ens2=w_ens2)
@@ -311,6 +316,11 @@ def run(n_neurons=100, t=10, t_test=10, f=Lowpass(0.01), dt=0.001, n_tests=10, n
             plt.tight_layout()
             plt.savefig('plots/tuning/multiply_ens2_time_%s.png'%n)
             plt.close()
+
+        if np.any(w_ens2):
+            fig, ax = plt.subplots()
+            sns.distplot(w_ens2.ravel())
+            plt.savefig("plots/w_ens2_multiply.png")
 
     if load_fd:
         load = np.load(load_fd)
@@ -409,17 +419,17 @@ def run(n_neurons=100, t=10, t_test=10, f=Lowpass(0.01), dt=0.001, n_tests=10, n
         nrmses_ens2=nrmses_ens2)
     return nrmses_ens2
 
-# nrmses_lif = run(n_neurons=30, t=60, n_tests=1, neuron_type=nengo.LIF())
-# nrmses_alif = run(n_neurons=30, t=60, n_tests=1, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1))
-# nrmses_wilson = run(n_neurons=30, t=60, n_tests=3, dt=0.000025, neuron_type=WilsonEuler())
-nrmses_durstewitz = run(n_neurons=30, t=150, n_tests=1, neuron_type=DurstewitzNeuron(), learn_w=True, learn_w2=True)
+nrmses_durstewitz = run(n_neurons=30, t=60, t_enc=300, n_tests=10, neuron_type=DurstewitzNeuron(), learn_w=True, learn_w2=True)
+nrmses_lif = run(n_neurons=30, t=60, n_tests=10, neuron_type=nengo.LIF())
+nrmses_alif = run(n_neurons=30, t=60, n_tests=10, neuron_type=AdaptiveLIFT(tau_adapt=0.1, inc_adapt=0.1))
+nrmses_wilson = run(n_neurons=30, t=60, n_tests=10, dt=0.000025, neuron_type=WilsonEuler())
 #, load_fd="data/fd_multiply_DurstewitzNeuron().npz")
 
-# nrmses = np.vstack((nrmses_lif, nrmses_alif, nrmses_wilson, nrmses_durstewitz))
-# nt_names =  ['LIF', 'ALIF', 'Wilson', 'Durstewitz']
-# fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-# sns.barplot(data=nrmses.T)
-# ax.set(ylabel='NRMSE')
-# plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
-# plt.tight_layout()
-# plt.savefig("plots/multiply_nrmses.png")
+nrmses = np.vstack((nrmses_lif, nrmses_alif, nrmses_wilson, nrmses_durstewitz))
+nt_names =  ['LIF', 'ALIF', 'Wilson', 'Durstewitz']
+fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+sns.barplot(data=nrmses.T)
+ax.set(ylabel='NRMSE')
+plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
+plt.tight_layout()
+plt.savefig("plots/multiply_nrmses.png")

@@ -31,45 +31,63 @@ neuron.h.load_file('NEURON/durstewitz.hoc')
 neuron.h.load_file('stdrun.hoc')
 
 
-__all__ = ['LIFNorm', 'AdaptiveLIFT', 'WilsonEuler', 'DurstewitzNeuron',
+__all__ = ['LIF', 'AdaptiveLIFT', 'WilsonEuler', 'WilsonRungeKutta', 'DurstewitzNeuron',
     'SimNeuronNeurons', 'TransmitSpikes', 'BiasSpikes', 'TransmitSignal', 'reset_neuron']
 
 
-class LIFNorm(LIF):
+class LIF(LIF):
+
     probeable = ("spikes", "voltage", "refractory_time")
-
-    min_voltage = NumberParam("min_voltage", high=0)
-
-    max_x = nengo.params.NumberParam('max_x')
 
     def __init__(self, max_x=1.0, tau_rc=0.02, tau_ref=0.002, amplitude=1):
         super().__init__(tau_rc=tau_rc, tau_ref=tau_ref, amplitude=amplitude)
-        self.max_x = max_x
 
-    def gain_bias(self, max_rates, intercepts):
-        """Analytically determine gain, bias."""
-        max_rates = np.array(max_rates, dtype=float, copy=False, ndmin=1)
-        intercepts = np.array(intercepts, dtype=float, copy=False, ndmin=1)
+    def rates(self, x, gain, bias):
+        """Estimates steady-state firing rate given gain and bias."""
+        J = self.current(x, gain, bias)
+        spiked = np.zeros_like(gain)
+        voltage = np.zeros_like(gain)
+        refractory_time = np.zeros_like(gain)
 
-        inv_tau_ref = 1. / self.tau_ref if self.tau_ref > 0 else np.inf
-        if np.any(max_rates > inv_tau_ref):
-            raise ValidationError("Max rates must be below the inverse "
-                                  "refractory period (%0.3f)" % inv_tau_ref,
-                                  attr='max_rates', obj=self)
+        return settled_firingrate(
+            self.step_math, J, states=[voltage, refractory_time],
+            dt=0.001, settle_time=0.1, sim_time=1.0)
 
-        x = -1 / np.expm1((self.tau_ref - 1 / max_rates) / self.tau_rc)
-        normalizer = 0.5 * self.max_x + 0.5  # == 1 when max_x == 1, 0.5*max_x when max_x >> 1
-        gain = (x - 1) * normalizer / (self.max_x - intercepts)
-        bias = 1 - gain * intercepts
-        return gain, bias
+    def step_math(self, dt, J, spiked, voltage, refractory_time):
+        # reduce all refractory times by dt
+        refractory_time -= dt
+
+        # compute effective dt for each neuron, based on remaining time.
+        # note that refractory times that have completed midway into this
+        # timestep will be given a partial timestep, and moreover these will
+        # be subtracted to zero at the next timestep (or reset by a spike)
+        delta_t = (dt - refractory_time).clip(0, dt)
+
+        # update voltage using discretized lowpass filter
+        # since v(t) = v(0) + (J - v(0))*(1 - exp(-t/tau)) assuming
+        # J is constant over the interval [t, t + dt)
+        voltage -= (J - voltage) * np.expm1(-delta_t / self.tau_rc)
+
+        # determine which neurons spiked (set them to 1/dt, else 0)
+        spiked_mask = voltage > 1
+        spiked[:] = spiked_mask * (self.amplitude / dt)
+
+        # set v(0) = 1 and solve for t to compute the spike time
+        t_spike = dt + self.tau_rc * np.log1p(
+            -(voltage[spiked_mask] - 1) / (J[spiked_mask] - 1)
+        )
+
+        # set spiked voltages to zero, refractory times to tau_ref, and
+        # rectify negative voltages to a floor of min_voltage
+        voltage[voltage < self.min_voltage] = self.min_voltage
+        voltage[spiked_mask] = 0
+        refractory_time[spiked_mask] = self.tau_ref + t_spike
 
 
-class AdaptiveLIFT(LIFRate):
+
+class AdaptiveLIFT(LIF):
     
-    '''
-    Aaron Voelker
-    https://github.com/nengo/nengo/issues/1423
-    '''
+    ''' Aaron Voelker, https://github.com/nengo/nengo/issues/1423'''
     
     probeable = ('spikes', 'voltage', 'refractory_time', 'threshold')
 
@@ -78,10 +96,9 @@ class AdaptiveLIFT(LIFRate):
     inc_adapt = NumberParam('inc_adapt', low=0)
 
     def __init__(self, tau_rc=0.02, tau_ref=0.002, min_voltage=0,
-                 amplitude=1, tau_adapt=0.1, inc_adapt=0.05):
-        super(AdaptiveLIFT, self).__init__(
-            tau_rc=tau_rc, tau_ref=tau_ref, amplitude=amplitude)
-        self.min_voltage = min_voltage
+                 amplitude=1, tau_adapt=0.1, inc_adapt=0.1):
+        super(AdaptiveLIFT, self).__init__(tau_rc=tau_rc, tau_ref=tau_ref, amplitude=amplitude)
+        # self.min_voltage = min_voltage
         self.tau_adapt = tau_adapt
         self.inc_adapt = inc_adapt
         
@@ -138,24 +155,6 @@ class AdaptiveLIFT(LIFRate):
         voltage[voltage < self.min_voltage] = self.min_voltage
         voltage[spiked_mask] = 0
         refractory_time[spiked_mask] = self.tau_ref + t_spike
-
-
-@Builder.register(AdaptiveLIFT)
-def build_alift(model, lif, neurons):
-    model.sig[neurons]['voltage'] = Signal(
-        np.zeros(neurons.size_in), name="%s.voltage" % neurons)
-    model.sig[neurons]['refractory_time'] = Signal(
-        np.zeros(neurons.size_in), name="%s.refractory_time" % neurons)
-    model.sig[neurons]['threshold'] = Signal(
-        np.ones(neurons.size_in), name="%s.threshold" % neurons)
-    model.add_op(SimNeurons(
-        neurons=lif,
-        J=model.sig[neurons]['in'],
-        output=model.sig[neurons]['out'],
-        states=[model.sig[neurons]['voltage'],
-                model.sig[neurons]['refractory_time'],
-                model.sig[neurons]['threshold']]))
-    
 
 
 class WilsonEuler(NeuronType):
@@ -228,6 +227,9 @@ class WilsonEuler(NeuronType):
         bias[:] = J_tops - gain
         return gain, bias
 
+    def max_rates_intercepts(self, gain, bias):
+        return np.zeros_like(gain), np.zeros_like(bias)
+
     def rates(self, x, gain, bias):
         """Estimates steady-state firing rate given gain and bias."""
         J = self.current(x, gain, bias)
@@ -243,9 +245,9 @@ class WilsonEuler(NeuronType):
 
     def step_math(self, dt, J, spiked, V, R, H, AP):
         # must use dt<0.0001 to avoid numerical errors
-        if np.abs(J).any() >= 2.0:
-            warnings.warn("input current exceeds failure point; clipping")
-            J = J.clip(max=self._maxJ)
+        # if np.abs(J).any() >= 2.0:
+        #     warnings.warn("input current exceeds failure point; clipping")
+        #     J = J.clip(max=self._maxJ)
         dV = -(17.81 + 47.58*V + 33.80*np.square(V))*(V - 0.48) - 26*R*(V + 0.95) - 13*H*(V + 0.95) + J
         dR = -R + 1.29*V + 0.79 + 3.30*np.square(V + 0.38)
         dH = -H + 11*(V + 0.754)*(V + 0.69)
@@ -258,7 +260,79 @@ class WilsonEuler(NeuronType):
         return spiked, V, R, H, AP
 
 
-@Builder.register(WilsonEuler)
+class WilsonRungeKutta(NeuronType):
+
+    probeable = ('spikes', 'voltage', 'recovery', 'conductance')
+    threshold = NumberParam('threshold')
+    tau_V = NumberParam('tau_V')
+    tau_R = NumberParam('tau_R')
+    tau_H = NumberParam('tau_H')
+    
+    _v0 = -0.754  # initial voltage
+    _r0 = 0.279  # initial recovery
+    _maxJ = 2.0  # clip input current at this maximum to avoid catastrophic shutdown
+    
+    def __init__(self, threshold=-0.20, tau_V=0.00097, tau_R=0.0056, tau_H=0.0990):
+        super(WilsonRungeKutta, self).__init__()
+        self.threshold = threshold
+        self.tau_V = tau_V
+        self.tau_R = tau_R
+        self.tau_H = tau_H
+        
+        # TODO(arvoelke): Try replacing this solver with something like
+        # http://www2.gsu.edu/~matrhc/PyDSTool.htm
+        # The main consideration is that we need a callback to count spikes
+        from scipy.integrate import ode
+        self.solver = ode(self._ode_fun).set_integrator(
+            'dopri5', first_step=0.000025, nsteps=100,
+            rtol=1e-2, atol=1e-3)  # runge-kutta method of order (4)5
+        
+    def rates(self, x, gain, bias):
+        """Estimates steady-state firing rate given gain and bias."""
+        J = self.current(x, gain, bias)
+        voltage = self._v0*np.ones_like(J)
+        recovery = self._r0*np.ones_like(J)
+        conductance = np.zeros_like(J)
+
+        return settled_firingrate(
+            self.step_math, J, [voltage, recovery, conductance],
+            dt=0.001, settle_time=0.1, sim_time=1.0)
+
+    def _ode_fun(self, dummy_t, y, J):  # first argument to scipy.integrate.ode
+        V, R, H = np.split(y, 3)
+        dV = (-(17.81 + 47.58*V + 33.80*np.square(V))*(V - 0.48) -
+              26*R*(V + 0.95) - 13*H*(V + 0.95) + J)
+        dR = -R + 1.29*V + 0.79 + 3.30*np.square(V + 0.38)
+        dH = -H + 11*(V + 0.754)*(V + 0.69)
+        return np.concatenate((
+            dV / self.tau_V, dR / self.tau_R, dH / self.tau_H))
+
+    def step_math(self, dt, J, spiked, V, R, H):
+        # It's a little silly to be reinitializing the solver on
+        # every time-step, but any other ways that I could think of would 
+        # violate the nengo builder's assumption that the neuron's state is
+        # encapsulated by the signals in SimNeurons
+        self.solver.set_initial_value(np.concatenate((V, R, H)))
+        self.solver.set_f_params(J.clip(max=self._maxJ))
+        
+        spiked[:] = 0
+        AP = V > self.threshold
+        def spike_detector(dummy_t, y):  # callback for each sub-step
+            V_t = y[:len(V)] > self.threshold
+            spiked[:] += V_t & (~AP)  # note the "+="
+            AP[:] = V_t
+        self.solver.set_solout(spike_detector)
+
+        V[:], R[:], H[:] = np.split(self.solver.integrate(self.solver.t + dt), 3)
+        if not self.solver.successful():
+            raise ValueError("ODE solver failed with status code: %d" % (
+                self.solver.get_return_code()))
+        spiked[:] /= dt
+
+        return spiked, V, R, H
+
+
+@Builder.register(WilsonRungeKutta)
 def build_wilsonneuron(model, neuron_type, neurons):
     model.sig[neurons]['voltage'] = Signal(
         neuron_type._v0*np.ones(neurons.size_in), name="%s.voltage" % neurons)
@@ -266,38 +340,31 @@ def build_wilsonneuron(model, neuron_type, neurons):
         neuron_type._r0*np.ones(neurons.size_in), name="%s.recovery" % neurons)
     model.sig[neurons]['conductance'] = Signal(
         np.zeros(neurons.size_in), name="%s.conductance" % neurons)
-    model.sig[neurons]['AP'] = Signal(
-        np.zeros(neurons.size_in, dtype=bool), name="%s.AP" % neurons)
     model.add_op(SimNeurons(
         neurons=neuron_type,
         J=model.sig[neurons]['in'],
         output=model.sig[neurons]['out'],
         states=[model.sig[neurons]['voltage'],
-            model.sig[neurons]['recovery'],
-            model.sig[neurons]['conductance'],
-            model.sig[neurons]['AP']]))
-
-
+                model.sig[neurons]['recovery'],
+                model.sig[neurons]['conductance']]))
 
 class DurstewitzNeuron(NeuronType):
-    '''
-    todo: nice description
-    '''
+
     probeable = ('spikes', 'voltage')
 
-    def __init__(self, v0=-65.0, dt_neuron=0.025, DA=False):
+    def __init__(self, v0=-65.0, dt_neuron=0.025):
         super(DurstewitzNeuron, self).__init__()
         self.v0 = v0
         self.dt_neuron = dt_neuron
-        self.DA = DA  # dopaminergic modulation ON/OFF
         self.max_rates = np.array([])
         self.intercepts = np.array([])
         
     def gain_bias(self, max_rates, intercepts):
-        return np.ones_like(max_rates), np.zeros_like(intercepts)
+        max_rates = np.array(max_rates, dtype=float, copy=False, ndmin=1)
+        intercepts = np.array(intercepts, dtype=float, copy=False, ndmin=1)
+        return max_rates, intercepts
         
     def max_rates_intercepts(self, gain, bias):
-        """Measure firing rate at each eval_point using neuron_rates, estimate x_int and rate at y_int"""
         return self.max_rates, self.intercepts
     
     def step_math(self, v_recs, spk_vecs, spk_recs, spk_before, voltage, spiked, time, dt):
@@ -316,21 +383,7 @@ class DurstewitzNeuron(NeuronType):
         for n in range(n_neurons):
             spiked[n] = (len(spk_after[n]) - len(spk_before[n])) / dt
             spk_before[n] = list(spk_after[n])
-        
-@Builder.register(DurstewitzNeuron)
-def build_neuronneuron(model, neuron_type, neurons):
-    model.sig[neurons]['voltage'] = Signal(
-        neuron_type.v0*np.ones(neurons.size_in), name="%s.voltage"%neurons)
-    neuronop = SimNeuronNeurons(
-        neuron_type=neuron_type,
-        n_neurons=neurons.size_in,
-        J=model.sig[neurons]['in'],
-        output=model.sig[neurons]['out'],
-        states=[model.time, model.sig[neurons]['voltage']],
-        dt=model.dt)
-    model.params[neurons] = neuronop.neurons
-    model.add_op(neuronop)
-    
+
 class SimNeuronNeurons(Operator):
     def __init__(self, neuron_type, n_neurons,  J, output, states, dt):
         super(SimNeuronNeurons, self).__init__()
@@ -376,44 +429,16 @@ class SimNeuronNeurons(Operator):
         return self.sets[1]
 
 class TransmitSpikes(Operator):
-    def __init__(self, neurons, taus, weights, spikes, states, dt):
+    def __init__(self, neurons, netcons, spikes, states, dt):
         super(TransmitSpikes, self).__init__()
         self.neurons = neurons
-        self.taus = taus
         self.dt = dt
-        self.weights = weights
         self.time = states[0]
         self.reads = [spikes, states[0]]
         self.updates = []
         self.sets = []
         self.incs = []
-        self.synapses = np.zeros((self.weights.shape), dtype=list)
-        for pre in range(self.synapses.shape[0]):
-            for post in range(self.synapses.shape[1]):
-                self.synapses[pre, post] = []
-                for loc in [self.neurons[post].basal(0.5),
-                            self.neurons[post].prox(0.5),
-                            self.neurons[post].dist(0.5)]:
-                    if len(self.taus) == 1:
-                        syn = neuron.h.ExpSyn(loc)
-                        syn.tau = self.taus[0]*1000
-                    elif len(taus) == 2:
-                        syn = neuron.h.Exp2Syn(loc)
-                        syn.tau1 = np.min(self.taus)*1000
-                        syn.tau2 = np.max(self.taus)*1000
-                    syn.e = 0.0 if self.weights[pre, post] > 0 else -70.0
-                    self.synapses[pre, post].append(syn)
-        self.netcons = np.zeros((self.weights.shape), dtype=list)
-        for pre in range(self.synapses.shape[0]):
-            for post in range(self.synapses.shape[1]):
-                # NetCon(source, target, threshold, delay, weight)
-                self.netcons[pre, post] = []
-                for compt in range(len(self.synapses[pre, post])):
-                    syn = self.synapses[pre, post][compt]
-                    w = np.abs(self.weights[pre, post])
-                    nc = neuron.h.NetCon(None, syn, 0, 0, w)
-#                     nc.active(0)  # turn off until build finishes
-                    self.netcons[pre, post].append(nc)
+        self.netcons = netcons
     def make_step(self, signals, dt, rng):
         spikes = signals[self.spikes]
         time = signals[self.time]
@@ -422,71 +447,10 @@ class TransmitSpikes(Operator):
             for pre in range(spikes.shape[0]):
                 if spikes[pre] > 0:
                     for post in range(len(self.neurons)):
-                        for nc in self.netcons[pre, post]:
-                            nc.event(t_neuron)
+                        self.netcons[pre, post].event(t_neuron)
         return step
     @property
     def spikes(self):
-        return self.reads[0]
-    
-class BiasSpikes(Operator):
-    def __init__(self, neurons, bias):
-        super(BiasSpikes, self).__init__()
-        self.neurons = neurons
-        self.tau = 0.1
-        self.bias = bias
-        self.reads = []
-        self.updates = []
-        self.sets = []
-        self.incs = []
-        self.stims = []
-        self.syns = []
-        self.ncs = []
-        for n in range(len(self.neurons)):
-            self.stims.append(neuron.h.NetStim())
-            self.syns.append(neuron.h.ExpSyn(neurons[n].soma(0.5)))
-            self.syns[-1].tau = self.tau * 1000  # time constant of synapse on spiking bias input
-            self.syns[-1].e = 0.0 if self.bias[n] > 0 else -70.0
-            self.ncs.append(neuron.h.NetCon(self.stims[-1], self.syns[-1], 0, 0, np.abs(self.bias[n])))
-            self.ncs[-1].pre().start = 0
-            self.ncs[-1].pre().number = 1e10
-            self.ncs[-1].pre().interval = 1
-            self.ncs[-1].pre().noise = 0  # 0 for regular spikes at rate, 1 for poisson spikes at rate
-#                 self.ncs[-1].active(0)  # turn off until build finishes
-    def make_step(self, signals, dt, rng):
-        def step():
-            pass
-        return step
-    
-class TransmitSignal(Operator):
-    def __init__(self, neurons, encoders, signal, states, dt):
-        super(TransmitSignal, self).__init__()
-        self.neurons = neurons
-        self.encoders = encoders
-        self.dt = dt
-        self.time = states[0]
-        self.reads = [signal, states[0]]
-        self.updates = []
-        self.sets = []
-        self.incs = []
-        self.Iclamps = np.zeros((len(self.neurons)), dtype=list)
-        for post, nrn in enumerate(self.neurons):
-            self.Iclamps[post] = []
-            for loc in [nrn.basal(0.5), nrn.prox(0.5), nrn.dist(0.5)]:
-                iclamp = neuron.h.IClamp(loc)
-                iclamp.dur = 1e9
-                iclamp.amp = 1e0
-                self.Iclamps[post].append(iclamp)
-    def make_step(self, signals, dt, rng):
-        sig = signals[self.signal]
-        time = signals[self.time]
-        def step():
-            for post in range(len(self.Iclamps)):
-                for iclamp in self.Iclamps[post]:
-                    iclamp.amp = 5e0*np.dot(sig, self.encoders[post])  # compensate for conductance syn?
-        return step
-    @property
-    def signal(self):
         return self.reads[0]
 
 @Builder.register(nengo.Connection)
@@ -509,75 +473,58 @@ def build_connection(model, conn):
         is_durstewitz = False
 
     if is_durstewitz:
-        rng = np.random.RandomState(model.seeds[conn])
         model.sig[conn]['in'] = model.sig[conn.pre_obj]['out']
-        post_obj = conn.post_obj if is_ens else conn.post_obj.ensemble
-        # load previously optimized gain/bias
-        encoders = model.params[post_obj].encoders
-        dim = post_obj.dimensions
-
-        # connect spiking poisson input to conn.post
-        if not hasattr(conn, 'biasspike'):
-            if hasattr(conn, 'bias'):
-                bias = np.array(conn.bias).ravel()
-            else:
-                bias = np.zeros((post_obj.n_neurons))
-            biasspike = BiasSpikes(model.params[post_obj.neurons], bias)
-            model.add_op(biasspike)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                conn.biasspike = biasspike
-                
-        # normalize by area under synapse curve, integral PSC(t) |b-a = F(b) - F(a), b=1s, a=0s
+        assert isinstance(conn.pre_obj, nengo.Ensemble) and 'spikes' in conn.pre_obj.neuron_type.probeable
         assert isinstance(conn.synapse, LinearSystem), "only nengolib synapses supported"
         assert len(conn.synapse.num) == 0, "only poles supported"
         assert 0 < len(conn.synapse.den) <= 2, "only exponential and double exponential synapses supported"
-        if hasattr(conn, 'gain'):
-            gain = np.array(conn.gain)
-        else:
-            gain = 1e-2 * np.ones((post_obj.n_neurons, 1))
-        taus = -1.0/np.array(conn.synapse.poles)
-        tf = 10.0
-        if len(taus) == 1:
-            gain /= (taus[0] * (-np.exp(-tf/taus[0]) + 1))
-        elif len(taus) == 2:
-            gain /= np.max(taus)/(np.max(taus)-np.min(taus)) * \
-                (np.min(taus) + np.max(taus) - \
-                 np.min(taus)*np.exp(-tf/np.min(taus)) - np.max(taus)*np.exp(-tf/np.max(taus)))
-        scaled_enc = encoders * gain
-        
-        if isinstance(conn.pre_obj, nengo.Ensemble) and 'spikes' in conn.pre_obj.neuron_type.probeable:
-            # connect spikes from conn.pre to conn.post with computed weight matrix
+        post_obj = conn.post_obj if is_ens else conn.post_obj.ensemble
+        pre_obj = conn.pre_obj
+        taus = -1.0/np.array(conn.synapse.poles) * 1000  # convert to ms
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")        
+            conn.rng = np.random.RandomState(model.seeds[conn])
+            # conn.e = conn.rng.uniform(-1, 1, size=(pre_obj.n_neurons, post_obj.n_neurons, post_obj.dimensions))
+            conn.e = np.zeros((pre_obj.n_neurons, post_obj.n_neurons, post_obj.dimensions))
+            conn.locations = conn.rng.uniform(0, 1, size=(pre_obj.n_neurons, post_obj.n_neurons))
+            conn.compartments = conn.rng.randint(0, 3, size=(pre_obj.n_neurons, post_obj.n_neurons))  # 0=proximal, 1=distal, 2=basal
+            conn.synapses = np.zeros((pre_obj.n_neurons, post_obj.n_neurons), dtype=list)
+            conn.netcons = np.zeros((pre_obj.n_neurons, post_obj.n_neurons), dtype=list)
+            conn.weights = np.zeros((pre_obj.n_neurons, post_obj.n_neurons))
             transform = full_transform(conn, slice_pre=False)
-            eval_points, d, solver_info = model.build(conn.solver, conn, rng, transform)
-            weights = np.dot(d.T, scaled_enc.T)
-            transmitspike = TransmitSpikes(model.params[post_obj.neurons], taus, weights,
-                model.sig[conn.pre_obj]['out'], states=[model.time], dt=model.dt)
-            model.add_op(transmitspike)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                conn.transmitspike = transmitspike
-            model.params[conn] = BuiltConnection(
-                eval_points=eval_points, solver_info=solver_info, transform=transform, weights=d)
-        elif isinstance(conn.pre_obj, nengo.Node) and is_ens:
-            transmitsignal = TransmitSignal(model.params[post_obj.neurons], scaled_enc,
-                model.sig[conn.pre_obj]['out'], states=[model.time], dt=model.dt)
-            model.add_op(transmitsignal)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                conn.transmitsignal = transmitsignal
-            model.params[conn] = BuiltConnection(
-                eval_points=None, solver_info=None, transform=None, weights=None)
-        else:
-            raise NotImplementedError("conn.pre_obj must be spiking ensemble or node")
+            eval_points, d, solver_info = model.build(conn.solver, conn, conn.rng, transform)
+            conn.d = d.T
+            conn.transmitspike = None
+        for post in range(post_obj.n_neurons):
+            nrn = model.params[post_obj.neurons][post]
+            for pre in range(pre_obj.n_neurons):
+                conn.weights[pre, post] = np.dot(conn.d[pre], conn.e[pre, post])
+                reversal = 0.0 if conn.weights[pre, post] > 0 else -70.0
+                if conn.compartments[pre, post] == 0:
+                    loc = nrn.prox(conn.locations[pre, post])
+                elif conn.compartments[pre, post] == 1:
+                    loc = nrn.dist(conn.locations[pre, post])
+                else:
+                    loc = nrn.basal(conn.locations[pre, post])
+                if len(taus) == 1:
+                    syn = neuron.h.ExpSyn(loc, taus[0], reversal)
+                elif len(taus) == 2:
+                    syn = neuron.h.Exp2Syn(loc, np.min(taus), np.max(taus), reversal)
+                conn.synapses[pre, post] = syn
+                conn.netcons[pre, post] = neuron.h.NetCon(None, syn, 0, 0, np.abs(conn.weights[pre, post]))
+        transmitspike = TransmitSpikes(model.params[post_obj.neurons], conn.netcons,
+            model.sig[conn.pre_obj]['out'], states=[model.time], dt=model.dt)
+        model.add_op(transmitspike)
+        conn.transmitspike = transmitspike
+        model.params[conn] = BuiltConnection(
+            eval_points=eval_points, solver_info=solver_info, transform=transform, weights=d)
     
     else:
         c = nengo.builder.connection.build_connection(model, conn)
         model.sig[conn]['weights'].readonly = False
         return c
-
     
-def reset_neuron(sim):
+def reset_neuron(sim, model):
     for key in list(sim.model.params.keys()):
         if type(key) == nengo.ensemble.Neurons:
             del(sim.model.params[key])
@@ -588,13 +535,79 @@ def reset_neuron(sim):
             for spk_vec in op.spk_vecs:
                 spk_vec.play_remove()
             del(op.neurons)
-        if isinstance(op, BiasSpikes):
-            del(op.neurons)
-            del(op.stims)
-            del(op.ncs)
         if isinstance(op, TransmitSpikes):
             del(op.neurons)
             del(op.netcons)
-        if isinstance(op, TransmitSignal):
-            del(op.neurons)
-            del(op.Iclamps)
+    for conn in model.connections:
+        if hasattr(conn, 'synapses'):
+            del(conn.synapses)
+        if hasattr(conn, 'netcons'):
+            del(conn.netcons)
+        if hasattr(conn, 'transmitspikes'):
+            del(conn.transmitspikes.neurons)
+            del(conn.transmitspikes.netcons)
+            del(conn.transmitspikes)
+
+
+@Builder.register(LIF)
+def build_lif(model, lif, neurons):
+    model.sig[neurons]['voltage'] = Signal(
+        np.zeros(neurons.size_in), name="%s.voltage" % neurons)
+    model.sig[neurons]['refractory_time'] = Signal(
+        np.zeros(neurons.size_in), name="%s.refractory_time" % neurons)
+    model.add_op(SimNeurons(
+        neurons=lif,
+        J=model.sig[neurons]['in'],
+        output=model.sig[neurons]['out'],
+        states=[model.sig[neurons]['voltage'],
+                model.sig[neurons]['refractory_time']]))
+
+@Builder.register(AdaptiveLIFT)
+def build_alift(model, lif, neurons):
+    model.sig[neurons]['voltage'] = Signal(
+        np.zeros(neurons.size_in), name="%s.voltage" % neurons)
+    model.sig[neurons]['refractory_time'] = Signal(
+        np.zeros(neurons.size_in), name="%s.refractory_time" % neurons)
+    model.sig[neurons]['threshold'] = Signal(
+        np.ones(neurons.size_in), name="%s.threshold" % neurons)
+    model.add_op(SimNeurons(
+        neurons=lif,
+        J=model.sig[neurons]['in'],
+        output=model.sig[neurons]['out'],
+        states=[model.sig[neurons]['voltage'],
+                model.sig[neurons]['refractory_time'],
+                model.sig[neurons]['threshold']]))
+
+
+@Builder.register(WilsonEuler)
+def build_wilsonneuron(model, neuron_type, neurons):
+    model.sig[neurons]['voltage'] = Signal(
+        neuron_type._v0*np.ones(neurons.size_in), name="%s.voltage" % neurons)
+    model.sig[neurons]['recovery'] = Signal(
+        neuron_type._r0*np.ones(neurons.size_in), name="%s.recovery" % neurons)
+    model.sig[neurons]['conductance'] = Signal(
+        np.zeros(neurons.size_in), name="%s.conductance" % neurons)
+    model.sig[neurons]['AP'] = Signal(
+        np.zeros(neurons.size_in, dtype=bool), name="%s.AP" % neurons)
+    model.add_op(SimNeurons(
+        neurons=neuron_type,
+        J=model.sig[neurons]['in'],
+        output=model.sig[neurons]['out'],
+        states=[model.sig[neurons]['voltage'],
+            model.sig[neurons]['recovery'],
+            model.sig[neurons]['conductance'],
+            model.sig[neurons]['AP']]))
+
+@Builder.register(DurstewitzNeuron)
+def build_neuronneuron(model, neuron_type, neurons):
+    model.sig[neurons]['voltage'] = Signal(
+        neuron_type.v0*np.ones(neurons.size_in), name="%s.voltage"%neurons)
+    neuronop = SimNeuronNeurons(
+        neuron_type=neuron_type,
+        n_neurons=neurons.size_in,
+        J=model.sig[neurons]['in'],
+        output=model.sig[neurons]['out'],
+        states=[model.time, model.sig[neurons]['voltage']],
+        dt=model.dt)
+    model.params[neurons] = neuronop.neurons
+    model.add_op(neuronop)

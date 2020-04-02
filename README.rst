@@ -33,6 +33,8 @@ Install NEURON
 
 	/pwd/x86_64/bin/nrnivmodl
 
+	(pwd could be /usr/local/nrn/, or an install directory in your home or user folder)
+
 
 Install detailed_neurons
 =======

@@ -34,13 +34,14 @@ sns.set(context='poster', style='white')
 from neuron_models import AdaptiveLIFT, WilsonEuler, DurstewitzNeuron, reset_neuron
 # from utils import bin_activities_values_single
 
-import neuron
-neuron.h.load_file('NEURON/durstewitz.hoc')
-neuron.h.load_file('stdrun.hoc')
+# import neuron
+# neuron.h.load_file('NEURON/durstewitz.hoc')
+# neuron.h.load_file('stdrun.hoc')
 
 
 __all__ = ['norms', 'd_opt', 'df_opt', 'LearningNode']
 
+    
 def norms(t, dt=0.001, stim_func=lambda t: np.cos(t), f=None, value=1.0):
     with nengo.Network() as model:
         u = nengo.Node(stim_func)
@@ -249,7 +250,7 @@ def dh_lstsq(stim_data, target_data, spk_data,
     return d_new, h_new
 
 class LearningNode(nengo.Node):
-    def __init__(self, N, N_pre, dim, conn, k=1e-5, w_max=1e-1, seed=0):
+    def __init__(self, N, N_pre, dim, conn, k=1e-5, w_max=1e-1, decay=lambda t: 1, seed=0):
         self.N = N
         self.N_pre = N_pre
         self.dim = dim
@@ -258,7 +259,7 @@ class LearningNode(nengo.Node):
         self.size_in = 2*N+N_pre+dim
         self.size_out = 0
         self.k = k
-        # self.decay = lambda t: 1
+        self.decay = decay
         self.rng = np.random.RandomState(seed=seed)
         super(LearningNode, self).__init__(
             self.step, size_in=self.size_in, size_out=self.size_out)
@@ -276,9 +277,9 @@ class LearningNode(nengo.Node):
             for dim in range(self.conn.d.shape[1]):
                 dim_scale = 1 if np.sum(np.abs(u)) == 0 else np.abs(u[dim])/np.sum(np.abs(u))
                 if self.conn.d[pre, dim] >= 0:
-                    delta_e = -self.k * a_pre[pre] * dim_scale  # * self.decay(t)
+                    delta_e = -self.k * a_pre[pre] * dim_scale * self.decay(t)
                 if self.conn.d[pre, dim] < 0:
-                    delta_e = self.k * a_pre[pre] * dim_scale
+                    delta_e = self.k * a_pre[pre] * dim_scale * self.decay(t)
                 self.conn.e[pre, post, dim] += delta_a * delta_e
             self.conn.weights[pre, post] = np.dot(self.conn.d[pre], self.conn.e[pre, post])
             if self.conn.weights[pre, post] > self.w_max:
@@ -290,3 +291,104 @@ class LearningNode(nengo.Node):
             # print(np.abs(self.conn.weights[pre, post]))
             self.conn.netcons[pre, post].syn().e = 0.0 if self.conn.weights[pre, post] > 0 else -70.0
         return
+    
+#     # optimize T_ff by trying sample values and seeing if any decoders d_out will match target=x=integral(u)
+#     if isinstance(neuron_type, DurstewitzNeuron):
+#         print("Optimizing T_ff and d_out")
+#         hyperparams = {}
+#         hyperparams['reg'] = reg
+#         hyperparams['n_neurons'] = n_neurons
+#         hyperparams['t'] = t
+#         hyperparams['dt'] = dt
+#         hyperparams['neuron_type'] = neuron_type
+#         hyperparams['stim_func'] = stim_func
+#         hyperparams['T_ff'] = hp.uniform('T_ff', 0.1, 0.3)
+# #         hyperparams['T_ff'] = 0.175
+#         np.savez("data/Toptimize.npz", d_ens=d_ens, taus_ens=taus_ens,
+#             taus_f=np.array([-1./f.poles[0], -1./f.poles[1]]), w_pre=w_pre, w_ens=w_ens)
+
+#         def objective(hyperparams):
+#             T_ff = hyperparams['T_ff']
+#             print("testing T_ff=%.3f, T_fb=%.3f"%(T_ff, T_fb))
+#             d_ens = np.load("data/Toptimize.npz")['d_ens']
+#             f_ens = DoubleExp(np.load("data/Toptimize.npz")['taus_ens'][0], np.load("data/Toptimize.npz")['taus_ens'][1])
+#             f = DoubleExp(np.load("data/Toptimize.npz")['taus_f'][0], np.load("data/Toptimize.npz")['taus_f'][1])
+#             w_pre = np.load("data/Toptimize.npz")['w_pre']
+#             w_post = np.load("data/Toptimize.npz")['w_ens']
+#             data = go(
+#                 d_ens,
+#                 f_ens,
+#                 n_neurons=hyperparams['n_neurons'],
+#                 t=hyperparams['t'],
+#                 f=f,
+#                 dt=hyperparams['dt'],
+#                 neuron_type=hyperparams['neuron_type'],
+#                 stim_func=hyperparams['stim_func'],
+#                 T_ff=T_ff,
+#                 T_fb=1.0,
+#                 w_pre=w_pre,
+#                 w_ens=w_ens,
+#                 progress_bar=True)
+#             a_ens = f_ens.filt(data['ens'], dt=hyperparams['dt'])
+#             target = f.filt(data['x'], dt=hyperparams['dt'])
+#             d_out = nengo.solvers.LstsqL2(reg=hyperparams['reg'])(a_ens, target)[0]
+#             xhat_ens = np.dot(a_ens, d_out)
+#             loss = nrmse(xhat_ens, target=target)
+#             fig, ax = plt.subplots()
+#             ax.plot(data['times'], target, linestyle="--", label='target')
+#             ax.plot(data['times'], xhat_ens, label='ens, nrmse=%.3f' %loss)
+#             ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="unsupervised\n T_ff=%.3f"%(T_ff))
+#             plt.legend(loc='upper right')
+#             plt.savefig("plots/integrate_%s_ens_Tff_%.3f.pdf"%(neuron_type, T_ff))
+#             return {'loss': loss, 'T_ff': T_ff, 'd_out': d_out, 'status': STATUS_OK}
+
+#         trials = Trials()
+#         fmin(objective,
+#             rstate=np.random.RandomState(seed=0),
+#             space=hyperparams,
+#             algo=tpe.suggest,
+#             max_evals=T_evals,
+#             trials=trials)
+#         best_idx = np.argmin(trials.losses())
+#         best = trials.trials[best_idx]
+#         T_ff = best['result']['T_ff']
+#         d_out = best['result']['d_out']
+#         print("Final T_ff:", T_ff)
+#         print("Final d_out:", d_out)
+
+    
+#     # optimize T_ff by trying sample values and seeing if any decoders d_out will match target=x=integral(u)
+#     if isinstance(neuron_type, DurstewitzNeuron):
+#         print("Optimizing T_ff and d_out")
+#         hyperparams = {}
+#         hyperparams['reg'] = reg
+#         hyperparams['n_neurons'] = n_neurons
+#         hyperparams['t'] = t
+#         hyperparams['dt'] = dt
+#         hyperparams['neuron_type'] = neuron_type
+#         hyperparams['stim_func'] = stim_func
+#         hyperparams['T_ff'] = hp.uniform('T_ff', 0.1, 0.3)
+# #         hyperparams['T_ff'] = 0.175
+#         np.savez("data/Toptimize.npz", d_ens=d_ens, taus_ens=taus_ens,
+#         np.savez('data/integrate_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens)
+
+#         times = np.arange(0, 1, 0.0001)
+#         fig, ax = plt.subplots()
+#         ax.plot(times, f.impulse(len(times), dt=0.0001), label=r"$f^x, \tau_1=%.3f, \tau_2=%.3f$" %(-1./f.poles[0], -1./f.poles[1]))
+#         ax.plot(times, f_ens.impulse(len(times), dt=0.0001), label=r"$f^{ens}, \tau_1=%.3f, \tau_2=%.3f, d: %s/%s$"
+#            %(-1./f_ens.poles[0], -1./f_ens.poles[1], np.count_nonzero(d_ens), n_neurons))
+#         ax.set(xlabel='time (seconds)', ylabel='impulse response', ylim=((0, 10)))
+#         ax.legend(loc='upper right')
+#         plt.tight_layout()
+#         plt.savefig("plots/integrate_%s_filters_ens.pdf"%neuron_type)
+
+#         a_ens = f_ens.filt(data['ens'], dt=dt)
+#         xhat_ens = np.dot(a_ens, d_ens)
+#         target = f.filt(f.filt(data['u'], dt=dt), dt=dt)
+#         nrmse_ens = nrmse(xhat_ens, target=target)
+#         fig, ax = plt.subplots()
+#         ax.plot(data['times'], target, linestyle="--", label='target')
+#         ax.plot(data['times'], xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
+#         ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="supervised")
+#         plt.legend(loc='upper right')
+#         plt.savefig("plots/integrate_%s_ens_train.pdf"%neuron_type)

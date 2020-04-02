@@ -27,8 +27,9 @@ import os
 import warnings
 
 import neuron
-neuron.h.load_file('NEURON/durstewitz.hoc')
 neuron.h.load_file('stdrun.hoc')
+neuron.h.load_file('NEURON/durstewitzDA.hoc')
+# neuron.h.load_file('NEURON/durstewitz.hoc')
 
 
 __all__ = ['LIF', 'AdaptiveLIFT', 'WilsonEuler', 'WilsonRungeKutta', 'DurstewitzNeuron',
@@ -352,8 +353,9 @@ class DurstewitzNeuron(NeuronType):
 
     probeable = ('spikes', 'voltage')
 
-    def __init__(self, v0=-65.0, dt_neuron=0.025):
+    def __init__(self, DA=1.0, v0=-65.0, dt_neuron=0.025):
         super(DurstewitzNeuron, self).__init__()
+        self.DA = DA
         self.v0 = v0
         self.dt_neuron = dt_neuron
         self.max_rates = np.array([])
@@ -388,7 +390,8 @@ class SimNeuronNeurons(Operator):
     def __init__(self, neuron_type, n_neurons,  J, output, states, dt):
         super(SimNeuronNeurons, self).__init__()
         self.neuron_type = neuron_type
-        self.neurons = [neuron.h.Durstewitz() for n in range(n_neurons)]
+#         self.neurons = [neuron.h.Durstewitz() for n in range(n_neurons)]
+        self.neurons = [neuron.h.DurstewitzDA(neuron_type.DA) for n in range(n_neurons)]
         self.reads = [states[0], J]
         self.sets = [output, states[1]]
         self.updates = []
@@ -507,11 +510,17 @@ def build_connection(model, conn):
                 else:
                     loc = nrn.basal(conn.locations[pre, post])
                 if len(taus) == 1:
-                    syn = neuron.h.ExpSyn(loc, taus[0], reversal)
+                    syn = neuron.h.ExpSyn(loc)
+                    syn.tau = taus[0]
+                    syn.e = reversal
                 elif len(taus) == 2:
-                    syn = neuron.h.Exp2Syn(loc, np.min(taus), np.max(taus), reversal)
+                    syn = neuron.h.Exp2Syn(loc)
+                    syn.tau1 = np.min(taus)
+                    syn.tau2 = np.max(taus)
+                    syn.e = reversal
                 conn.synapses[pre, post] = syn
-                conn.netcons[pre, post] = neuron.h.NetCon(None, syn, 0, 0, np.abs(conn.weights[pre, post]))
+                conn.netcons[pre, post] = neuron.h.NetCon(None, conn.synapses[pre, post])
+                conn.netcons[pre, post].weight[0] = np.abs(conn.weights[pre, post])
         transmitspike = TransmitSpikes(model.params[post_obj.neurons], conn.netcons,
             model.sig[conn.pre_obj]['out'], states=[model.time], dt=model.dt)
         model.add_op(transmitspike)

@@ -23,7 +23,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8),
         u = nengo.Node(stim_func)
 
         # Ensembles
-        pre = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, seed=seed)
+        pre = nengo.Ensemble(n_neurons, 1, seed=seed)
         ens = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=neuron_type, seed=seed)
         ens2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=neuron_type2, seed=seed+1)
         supv = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=LIF(), seed=seed)
@@ -51,12 +51,12 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8),
 
         # Bioneurons
         if learn and isinstance(neuron_type, DurstewitzNeuron):
-            node = LearningNode(n_neurons, pre.n_neurons, 1, conn, k=2e-5)
+            node = LearningNode(n_neurons, pre.n_neurons, 1, conn, k=1e-5)
             nengo.Connection(pre.neurons, node[0:pre.n_neurons], synapse=f)
             nengo.Connection(ens.neurons, node[pre.n_neurons:pre.n_neurons+n_neurons], synapse=f_smooth)
             nengo.Connection(supv.neurons, node[pre.n_neurons+n_neurons: pre.n_neurons+2*n_neurons], synapse=f_smooth)
         if learn2 and isinstance(neuron_type, DurstewitzNeuron):
-            node2 = LearningNode(n_neurons, n_neurons, 1, conn2, k=2e-5)
+            node2 = LearningNode(n_neurons, n_neurons, 1, conn2, k=1e-5)
             nengo.Connection(ens.neurons, node2[0:n_neurons], synapse=f_ens)
             nengo.Connection(ens2.neurons, node2[n_neurons:2*n_neurons], synapse=f_smooth)
             nengo.Connection(supv2.neurons, node2[2*n_neurons: 3*n_neurons], synapse=f_smooth)
@@ -94,7 +94,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8),
     )
 
 
-def run(n_neurons=30, t=30, t_test=10, t_enc=200, dt=0.001, n_tests=10, neuron_type=LIF(),
+def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_type=LIF(),
         f=DoubleExp(1e-3, 3e-2), f_out=DoubleExp(1e-3, 1e-1), f_smooth=DoubleExp(1e-2, 2e-1), reg=0, penalty=1.0, 
         load_w=None, load_df=None):
 
@@ -114,19 +114,19 @@ def run(n_neurons=30, t=30, t_test=10, t_enc=200, dt=0.001, n_tests=10, neuron_t
                 neuron_type=neuron_type, w_ens=w_ens, w_ens2=w_ens2, learn=True, half=True)
             w_ens = data['w_ens']
             fig, ax = plt.subplots()
-            sns.distplot(w_ens.ravel())
+            sns.distplot(w_ens.ravel(), ax=ax, bins=np.arange(-0.001, 0.001, 0.0001))
             ax.set(xlabel='weights', ylabel='frequency')
             plt.savefig("plots/identity_%s_w_ens.pdf"%neuron_type)
             np.savez('data/identity_w.npz', w_ens=w_ens)
             a_ens = f_smooth.filt(data['ens'], dt=0.001)
             a_supv = f_smooth.filt(data['supv'], dt=0.001)
             for n in range(n_neurons):
-                fig, (ax, ax2) = plt.subplots(2, 1, sharex=True)
-                ax.plot(data['times'][:10000], a_supv[:,n][:10000], alpha=0.5, label='supv')
-                ax.plot(data['times'][:10000], a_ens[:,n][:10000], alpha=0.5, label='ens')
-                ax.set(xlabel='time', ylim=((0, 40)))
-                ax2.plot(data['times'][-10000:], a_supv[:,n][-10000:], alpha=0.5, label='supv')
-                ax2.plot(data['times'][-10000:], a_ens[:,n][-10000:], alpha=0.5, label='ens')
+                fig, (ax, ax2) = plt.subplots(2, 1)
+                ax.plot(data['times'][:20000], a_supv[:,n][:20000], alpha=0.5, label='supv')
+                ax.plot(data['times'][:20000], a_ens[:,n][:20000], alpha=0.5, label='ens')
+                ax.set(ylim=((0, 40)))
+                ax2.plot(data['times'][-20000:], a_supv[:,n][-20000:], alpha=0.5, label='supv')
+                ax2.plot(data['times'][-20000:], a_ens[:,n][-20000:], alpha=0.5, label='ens')
                 ax2.set(xlabel='time', ylabel='Firing Rate', ylim=((0, 40)))
                 plt.legend()
                 plt.savefig('plots/tuning/identity_ens1_activity_%s.pdf'%n)
@@ -195,23 +195,23 @@ def run(n_neurons=30, t=30, t_test=10, t_enc=200, dt=0.001, n_tests=10, neuron_t
             w_ens2 = np.load(load_w)['w_ens2']
         else:
             print('Optimizing ens2 encoders')
-            stim_func = nengo.processes.WhiteSignal(period=t_enc, high=1, rms=0.5, seed=0)
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_enc, f=f, f_smooth=f_smooth, neuron_type=neuron_type, stim_func=stim_func, w_ens=w_ens, w_ens2=w_ens2, learn2=True)
+            stim_func = nengo.processes.WhiteSignal(period=2*t_enc, high=1, rms=0.5, seed=0)
+            data = go(d_ens, f_ens, n_neurons=n_neurons, t=2*t_enc, f=f, f_smooth=f_smooth, neuron_type=neuron_type, stim_func=stim_func, w_ens=w_ens, w_ens2=w_ens2, learn2=True)
             w_ens2 = data['w_ens2']
             fig, ax = plt.subplots()
-            sns.distplot(w_ens2.ravel())
+            sns.distplot(w_ens2.ravel(), ax=ax, bins=np.arange(-0.001, 0.001, 0.0001))
             ax.set(xlabel='weights', ylabel='frequency')
             plt.savefig("plots/identity_%s_w_ens2.pdf"%neuron_type)
             np.savez('data/identity_w.npz', w_ens=w_ens, w_ens2=w_ens2)
             a_ens = f_smooth.filt(data['ens2'], dt=0.001)
             a_supv = f_smooth.filt(data['supv2'], dt=0.001)
             for n in range(n_neurons):
-                fig, (ax, ax2) = plt.subplots(2, 1, sharex=True)
-                ax.plot(data['times'][:10000], a_supv[:,n][:10000], alpha=0.5, label='supv2')
-                ax.plot(data['times'][:10000], a_ens[:,n][:10000], alpha=0.5, label='ens2')
-                ax.set(xlabel='time', ylim=((0, 40)))
-                ax2.plot(data['times'][-10000:], a_supv[:,n][-10000:], alpha=0.5, label='supv2')
-                ax2.plot(data['times'][-10000:], a_ens[:,n][-10000:], alpha=0.5, label='ens2')
+                fig, (ax, ax2) = plt.subplots(2, 1)
+                ax.plot(data['times'][:20000], a_supv[:,n][:20000], alpha=0.5, label='supv2')
+                ax.plot(data['times'][:20000], a_ens[:,n][:20000], alpha=0.5, label='ens2')
+                ax.set(ylim=((0, 40)))
+                ax2.plot(data['times'][-20000:], a_supv[:,n][-20000:], alpha=0.5, label='supv2')
+                ax2.plot(data['times'][-20000:], a_ens[:,n][-20000:], alpha=0.5, label='ens2')
                 ax2.set(xlabel='time', ylabel='Firing Rate', ylim=((0, 40)))
                 plt.legend()
                 plt.savefig('plots/tuning/identity_ens2_activity_%s.pdf'%n)
@@ -243,7 +243,7 @@ def run(n_neurons=30, t=30, t_test=10, t_enc=200, dt=0.001, n_tests=10, neuron_t
         sns.distplot(d_out2.ravel())
         ax.set(xlabel='decoders', ylabel='frequency')
         plt.savefig("plots/identity_%s_d_out2.pdf"%neuron_type)
-        
+
         a_ens2 = f_out2.filt(data['ens2'], dt=dt)
         x2 = f_out.filt(data['x2'], dt=dt)
         xhat_ens2 = np.dot(a_ens2, d_out2)
@@ -309,17 +309,17 @@ def run(n_neurons=30, t=30, t_test=10, t_enc=200, dt=0.001, n_tests=10, neuron_t
 # nrmses_lif = run(neuron_type=LIF())
 # nrmses_alif = run(neuron_type=AdaptiveLIFT())
 # nrmses_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
-# nrmses_durstewitz = run(neuron_type=DurstewitzNeuron())
+nrmses_durstewitz = run(neuron_type=DurstewitzNeuron(DA=1.0))
 
-nrmses_lif = np.load("data/identity_LIF()_results.npz")['nrmses_ens2']
-nrmses_alif = np.load("data/identity_AdaptiveLIFT()_results.npz")['nrmses_ens2']
-nrmses_wilson = np.load("data/identity_WilsonEuler()_results.npz")['nrmses_ens2']
-nrmses_durstewitz = np.load("data/identity_DurstewitzNeuron()_results.npz")['nrmses_ens2']
+# nrmses_lif = np.load("data/identity_LIF()_results.npz")['nrmses_ens2']
+# nrmses_alif = np.load("data/identity_AdaptiveLIFT()_results.npz")['nrmses_ens2']
+# nrmses_wilson = np.load("data/identity_WilsonEuler()_results.npz")['nrmses_ens2']
+# nrmses_durstewitz = np.load("data/identity_DurstewitzNeuron()_results.npz")['nrmses_ens2']
 
-nrmses = np.vstack((nrmses_lif, nrmses_alif, nrmses_wilson, nrmses_durstewitz))
-nt_names =  ['LIF', 'ALIF', 'Wilson', 'Durstewitz']
-fig, ax = plt.subplots()
-sns.barplot(data=nrmses.T)
-ax.set(ylabel='NRMSE')
-plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
-plt.savefig("figures/identity_all_nrmses.pdf")
+# nrmses = np.vstack((nrmses_lif, nrmses_alif, nrmses_wilson, nrmses_durstewitz))
+# nt_names =  ['LIF', 'ALIF', 'Wilson', 'Durstewitz']
+# fig, ax = plt.subplots()
+# sns.barplot(data=nrmses.T)
+# ax.set(ylabel='NRMSE')
+# plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
+# plt.savefig("figures/identity_all_nrmses.pdf")

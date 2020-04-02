@@ -84,8 +84,8 @@ def feedback(x):
 def mountain(x, a, b, c):
     return (a*x + b)*(x<=c) + (-a*x + 2*a*c + b)*(x>c)
 
-def run(n_neurons=5000, neuron_type=LIF(), t_train=50, t=50, f=DoubleExp(1e-3, 1e-1), dt=0.001, dt_sample=0.001, seed=0,
-        m=Uniform(20, 40), i=Uniform(-1, 0.8), r=40, n_tests=3, smooth=100, reg=1e-1, penalty=0, df_evals=20, load_fd=False):
+def run(n_neurons=5000, neuron_type=LIF(), t_train=50, t=150, f=DoubleExp(1e-3, 1e-1), dt=0.001, dt_sample=0.001, seed=0,
+        m=Uniform(20, 40), i=Uniform(-1, 0.8), r=40, n_tests=10, smooth=100, reg=1e-1, penalty=0, df_evals=20, load_fd=False):
 
     d_ens = np.zeros((n_neurons, 3))
     f_ens = f
@@ -265,18 +265,18 @@ def run(n_neurons=5000, neuron_type=LIF(), t_train=50, t=50, f=DoubleExp(1e-3, 1
     return tent_errors
 
 
-tent_error_lif = run(neuron_type=LIF())
-tent_error_alif = run(neuron_type=AdaptiveLIFT())
-tent_error_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
+tent_error_lif = run(neuron_type=LIF(), load_fd="data/lorenz_LIF()_fd.npz")
+tent_error_alif = run(neuron_type=AdaptiveLIFT(), load_fd="data/lorenz_AdaptiveLIFT()_fd.npz")
+tent_error_wilson = run(neuron_type=WilsonEuler(), dt=0.00005, load_fd="data/lorenz_WilsonEuler()_fd.npz")
 
-tent_errors = np.vstack((nrmses_lif, nrmses_alif, nrmses_wilson))
-nt_names =  ['LIF', 'ALIF', 'Wilson']
-fig, ax = plt.subplots(1, 1)
-sns.barplot(data=tent_errors.T)
-ax.set(ylabel='Tent Map Error')
-plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
-plt.tight_layout()
-plt.savefig("plots/lorenz_all_errors.pdf")
+# tent_errors = np.vstack((tent_error_lif, tent_error_alif, tent_error_wilson))
+# nt_names =  ['LIF', 'ALIF', 'Wilson']
+# fig, ax = plt.subplots(1, 1)
+# sns.barplot(data=tent_errors.T)
+# ax.set(ylabel='Tent Map Error')
+# plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
+# plt.tight_layout()
+# plt.savefig("plots/lorenz_all_errors.pdf")
 
 
 

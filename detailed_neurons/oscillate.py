@@ -17,9 +17,7 @@ import seaborn as sns
 sns.set(context='paper', style='white')
 
 
-def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 1), seed=0, dt=0.001, neuron_type=nengo.LIF(),
-        f=Lowpass(0.1), f_smooth=Lowpass(0.1), freq=1, w_pre=None, w_ens=None,
-        learn_pre_ens=False, learn_supv_ens=False, learn_fd=False):
+def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8), seed=0, dt=0.001, neuron_type=nengo.LIF(), f=Lowpass(0.1), f_smooth=Lowpass(0.1), freq=1, w_ff=None, w_fb=None, e_ff=None, e_fb=None, L_ff=False, L_fb=False, supervised=False):
 
     w = 2*np.pi*freq
     A = [[0, -w], [w, 0]]
@@ -38,7 +36,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 1), s
         nengo.Connection(u, pre, synapse=None, seed=seed)
         pre_ens = nengo.Connection(pre, ens, synapse=f, seed=seed)
 
-        if learn_pre_ens and isinstance(neuron_type, DurstewitzNeuron):
+        if L_ff:
             supv = nengo.Ensemble(n_neurons, 2, max_rates=m, intercepts=i, neuron_type=LIF(), seed=seed, radius=2)
             nengo.Connection(pre, supv, synapse=f, seed=seed)
             node = LearningNode(n_neurons, pre.n_neurons, 1, pre_ens)
@@ -47,7 +45,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 1), s
             nengo.Connection(supv.neurons, node[pre.n_neurons+n_neurons: pre.n_neurons+2*n_neurons], synapse=f_smooth)
             nengo.Connection(u, node[-1], synapse=f)
 
-        if learn_supv_ens and isinstance(neuron_type, DurstewitzNeuron):
+        if L_fb:
             supv = nengo.Ensemble(n_neurons, 2, max_rates=m, intercepts=i, neuron_type=neuron_type, seed=seed, radius=2)
             pre_supv = nengo.Connection(pre, supv, synapse=f, seed=seed)
             supv_ens = nengo.Connection(supv, ens, synapse=f_ens, seed=seed, solver=NoSolver(d_ens))
@@ -57,71 +55,91 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 1), s
             nengo.Connection(supv.neurons, node[2*n_neurons: 3*n_neurons], synapse=f_smooth)
             nengo.Connection(u, node[-1], synapse=f)
 
-        if not learn_fd and not learn_pre_ens and not learn_supv_ens:
+        if not L_ff and not L_fb and not supervised:
             off = nengo.Node(lambda t: (t>0.1))
             nengo.Connection(off, pre.neurons, synapse=None, transform=-1e3*np.ones((pre.n_neurons, 1)))
             ens_ens = nengo.Connection(ens, ens, synapse=f_ens, seed=seed, solver=NoSolver(d_ens))
 
         # Probes
         p_u = nengo.Probe(u, synapse=None)
-        p_supv = nengo.Probe(supv.neurons, synapse=None) if learn_pre_ens or learn_supv_ens else None,
+        p_supv = nengo.Probe(supv.neurons, synapse=None) if L_ff or L_fb else None,
         p_ens = nengo.Probe(ens.neurons, synapse=None)
 
     with nengo.Simulator(model, seed=seed, dt=dt) as sim:
-        if np.any(w_pre):
+        if np.any(w_ff):
             for pre in range(pre.n_neurons):
                 for post in range(n_neurons):
-                    pre_ens.weights[pre, post] = w_pre[pre, post]
-                    pre_ens.netcons[pre, post].weight[0] = np.abs(w_pre[pre, post])
-                    pre_ens.netcons[pre, post].syn().e = 0 if w_pre[pre, post] > 0 else -70
-        if np.any(w_ens):
+                    pre_ens.weights[pre, post] = w_ff[pre, post]
+                    pre_ens.netcons[pre, post].weight[0] = np.abs(w_ff[pre, post])
+                    pre_ens.netcons[pre, post].syn().e = 0 if w_ff[pre, post] > 0 else -70
+        if np.any(e_ff) and L_ff:
+            pre_ens.e = e_ff
+        if np.any(w_fb):
             for pre in range(n_neurons):
                 for post in range(n_neurons):
-                    if learn_supv_ens:
-                        supv_ens.weights[pre, post] = w_ens[pre, post]
-                        supv_ens.netcons[pre, post].weight[0] = np.abs(w_ens[pre, post])
-                        supv_ens.netcons[pre, post].syn().e = 0 if w_ens[pre, post] > 0 else -70
-                    if not learn_supv_ens and not learn_pre_ens:
-                        ens_ens.weights[pre, post] = w_ens[pre, post]
-                        ens_ens.netcons[pre, post].weight[0] = np.abs(w_ens[pre, post])
-                        ens_ens.netcons[pre, post].syn().e = 0 if w_ens[pre, post] > 0 else -70
+                    if L_fb:
+                        supv_ens.weights[pre, post] = w_fb[pre, post]
+                        supv_ens.netcons[pre, post].weight[0] = np.abs(w_fb[pre, post])
+                        supv_ens.netcons[pre, post].syn().e = 0 if w_fb[pre, post] > 0 else -70
+                    else:
+                        ens_ens.weights[pre, post] = w_fb[pre, post]
+                        ens_ens.netcons[pre, post].weight[0] = np.abs(w_fb[pre, post])
+                        ens_ens.netcons[pre, post].syn().e = 0 if w_fb[pre, post] > 0 else -70
+        if np.any(e_fb) and L_fb:
+            supv_ens.e = e_fb
+
         neuron.h.init()
         sim.run(t)
         reset_neuron(sim, model) 
-    
+
+    if L_ff and hasattr(pre_ens, 'weights'):
+        w_ff = pre_ens.weights
+        e_ff = pre_ens.e
+    if L_fb and hasattr(supv_ens, 'weights'):
+        w_fb = supv_ens.weights
+        e_fb = supv_ens.e
+
     return dict(
         times=sim.trange(),
         u=sim.data[p_u],
         ens=sim.data[p_ens],
-        supv=sim.data[p_supv] if learn_pre_ens or learn_supv_ens else None,
-        w_pre=pre_ens.weights if isinstance(neuron_type, DurstewitzNeuron) else None,
-        w_ens=supv_ens.weights if isinstance(neuron_type, DurstewitzNeuron) and learn_supv_ens else None,
+        supv=sim.data[p_supv] if L_ff or L_fb else None,
+        w_ff=w_ff,
+        w_fb=w_fb,
+        e_ff=e_ff,
+        e_fb=e_fb,
     )
 
 
-def run(n_neurons=200, t=30, t_test=10, dt=0.001, dt_sample=0.001, seed=0, m=Uniform(20, 40), i=Uniform(-1, 1),
-        f=DoubleExp(1e-3, 1e-1), f_out=DoubleExp(1e-3, 1e-1), f_smooth=DoubleExp(1e-2, 2e-1), reg=1e-2,
-        freq=1, neuron_type=LIF(), load_fd=False, load_fd_out=None):
+def run(n_neurons=200, t=11, t_test=11, dt=0.001, f=DoubleExp(1e-3, 2e-1), penalty=0, reg=1e-1, freq=1, neuron_type=LIF(), load_fd=False, load_fd_out=None):
 
     d_ens = np.zeros((n_neurons, 2))
     f_ens = f
-    w_pre = None
-    w_ens = None
+    w_ff = None
+    w_fb = None
+    e_ff = None
+    e_fb = None
+    f_smooth=DoubleExp(1e-2, 2e-1)
     print('Neuron Type: %s'%neuron_type)
 
     if isinstance(neuron_type, DurstewitzNeuron):
         if load_w:
-            w_pre = np.load(load_w)['w_pre']
+            w_ff = np.load(load_w)['w_ff']
         else:
             print('optimizing encoders from pre into DurstewitzNeuron ens')
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, f_smooth=f_smooth, dt=0.001,
-                neuron_type=neuron_type, w_pre=w_pre, w_ens=w_ens, learn_pre_ens=True)
-            w_pre = data['w_pre']
+            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=0.001,
+                neuron_type=neuron_type, w_ff=w_ff, e_ff=e_ff, L_ff=True)
+            w_ff = data['w_ff']
+            np.savez('data/oscillate_w.npz', w_ff=w_ff, e_ff=e_ff)
+
             fig, ax = plt.subplots()
-            sns.distplot(w_pre.ravel())
-            ax.set(xlabel='weights', ylabel='frequency')
-            plt.savefig("plots/oscillate_%s_w_supv.pdf"%neuron_type)
-            np.savez('data/oscillate_w.npz', w_pre=w_pre)
+            xmin = np.mean(w_ff.ravel()) - 2*np.std(w_ff.ravel())
+            xmax = np.mean(w_ff.ravel()) + 2*np.std(w_ff.ravel())
+            bins = np.linspace(xmin, xmax, n_neurons)
+            sns.distplot(w_ff.ravel(), bins=bins, ax=ax, kde=False)
+            ax.set(xlabel='weights', ylabel='frequency', xlim=((xmin, xmax)))
+            plt.savefig("plots/oscillate_%s_w_ff.pdf"%neuron_type)
+            
             a_ens = f_smooth.filt(data['ens'], dt=0.001)
             a_supv = f_smooth.filt(data['supv'], dt=0.001)
             for n in range(n_neurons):
@@ -141,9 +159,8 @@ def run(n_neurons=200, t=30, t_test=10, dt=0.001, dt_sample=0.001, seed=0, m=Uni
         f_ens = DoubleExp(taus_ens[0], taus_ens[1])
     else:
         print('gathering filter/decoder training data for ens')
-        data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type,
-            f_smooth=f_smooth, w_pre=w_pre, w_ens=w_ens, learn_fd=True)
-        d_ens, f_ens, taus_ens = df_opt(data['u'], data['ens'], f, dt=dt, name='oscillate_%s'%neuron_type, reg=reg, penalty=0)
+        data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type, w_ff=w_ff, supervised=True)
+        d_ens, f_ens, taus_ens = df_opt(data['u'][1000:], data['ens'][1000:], f, dt=dt, name='oscillate_%s'%neuron_type, reg=reg, penalty=penalty)
         np.savez('data/oscillate_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens)
 
         times = np.arange(0, 1, 0.0001)
@@ -167,96 +184,88 @@ def run(n_neurons=200, t=30, t_test=10, dt=0.001, dt_sample=0.001, seed=0, m=Uni
         plt.legend(loc='upper right')
         plt.savefig("plots/oscillate_%s_pre_ens_train.pdf"%neuron_type)
 
-        fig, ax = plt.subplots()
-        sns.distplot(d_ens.ravel())
-        ax.set(xlabel='decoders', ylabel='frequency')
-        plt.savefig("plots/oscillate_%s_d_ens.pdf"%neuron_type)
+#         fig, ax = plt.subplots()
+#         sns.distplot(d_ens.ravel())
+#         ax.set(xlabel='decoders', ylabel='frequency')
+#         plt.savefig("plots/oscillate_%s_d_ens.pdf"%neuron_type)
 
     if isinstance(neuron_type, DurstewitzNeuron):
         if load_w:
-            w_ens = np.load(load_w)['w_ens']
+            w_fb = np.load(load_w)['w_fb']
         else:
             print('optimizing encoders into DurstewitzNeuron ens')
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=0.001,
-                f_smooth=f_smooth, neuron_type=neuron_type, w_pre=w_pre, w_ens=w_ens, learn_supv_ens=True)
-            w_ens = data['w_ens']
-            np.savez('data/w_oscillate.npz', w_pre=w_pre, w_ens=w_ens)
+            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=0.001, neuron_type=neuron_type, w_ff=w_ff, w_fb=w_fb, e_fb=e_fb, L_fb=True)
+            w_fb = data['w_fb']
+            np.savez('data/oscillate_w.npz', w_ff=w_ff, e_ff=e_ff, w_fb=w_fb, e_fb=e_fb)
             
-#     print('gathering training data for readout filters and decoders')
-#     data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type,
-#         f_smooth=f_smooth, w_pre=w_pre, w_ens=w_ens)
-#     d_out, f_out1, taus_out = df_opt(data['u'][10000:], data['ens'][10000:], f_out, dt=dt, name='oscillate_out_%s'%neuron_type, reg=reg, penalty=0)
-#     np.savez('data/oscillate_%s_df.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out=d_out, taus_out=taus_out)
-
-#     fig, ax = plt.subplots()
-#     sns.distplot(d_out.ravel())
-#     ax.set(xlabel='decoders', ylabel='frequency')
-#     plt.savefig("plots/oscillate_%s_d_out.pdf"%neuron_type)
-
-#     times = np.arange(0, 1, 0.0001)
-#     fig, ax = plt.subplots()
-#     ax.plot(times, f_out.impulse(len(times), dt=0.0001), label=r"$f^{out}, \tau_1=%.3f, \tau_2=%.3f$"
-#         %(-1./f_out.poles[0], -1./f_out.poles[1]))
-#     ax.plot(times, f_out1.impulse(len(times), dt=0.0001), label=r"$f^{out1}, \tau_1=%.3f, \tau_2=%.3f, d: %s/%s$"
-#        %(-1./f_out1.poles[0], -1./f_out1.poles[1], np.count_nonzero(d_out), n_neurons))
-#     ax.set(xlabel='time (seconds)', ylabel='impulse response', ylim=((0, 10)))
-#     ax.legend(loc='upper right')
-#     plt.tight_layout()
-#     plt.savefig("plots/oscillate_%s_filters_out.pdf"%neuron_type)
-
-#     x = f_out.filt(data['u'], dt=dt)[10000:]
-#     a_ens = f_out1.filt(data['ens'], dt=dt)
-#     xhat_ens = np.dot(a_ens, d_out)[10000:]
-#     nrmse_ens = nrmse(xhat_ens, target=x)
-#     fig, ax = plt.subplots()
-#     ax.plot(data['times'][10000:], x, linestyle="--", label='x')
-#     ax.plot(data['times'][10000:], xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
-#     ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="ens_ens")
-#     plt.legend(loc='upper right')
-#     plt.savefig("plots/oscillate_%s_train.pdf"%neuron_type)
-    
-
+            fig, ax = plt.subplots()
+            xmin = np.mean(w_fb.ravel()) - 2*np.std(w_fb.ravel())
+            xmax = np.mean(w_fb.ravel()) + 2*np.std(w_fb.ravel())
+            bins = np.linspace(xmin, xmax, n_neurons)
+            sns.distplot(w_fb.ravel(), bins=bins, ax=ax, kde=False)
+            ax.set(xlabel='weights', ylabel='frequency', xlim=((xmin, xmax)))
+            plt.savefig("plots/oscillate_%s_w_fb.pdf"%neuron_type)
+            
     print("Testing")
-    data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_test, f=f, dt=dt, neuron_type=neuron_type,
-        f_smooth=f_smooth, w_pre=w_pre, w_ens=w_ens)
+    data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_test, f=f, dt=dt, neuron_type=neuron_type, w_ff=w_ff, w_fb=w_fb)
 
-    x = f_out.filt(data['u'], dt=dt)[10000:]
     a_ens = f_ens.filt(data['ens'], dt=dt)
-    xhat_ens = np.dot(a_ens, d_ens)[10000:]
-    times = data['times'][10000:]
+    xhat_ens_0 = np.dot(a_ens, d_ens)[:,0]
+    xhat_ens_1 = np.dot(a_ens, d_ens)[:,1]
+    x_0 = f.filt(data['u'], dt=dt)[:,0]
+    x_1 = f.filt(data['u'], dt=dt)[:,1]
+    times = data['times']
 
     # curve fit to a sinusoid of arbitrary frequency, phase, magnitude
-    # calculate error as difference of fit sinusoid frequency and target sinusoid frequency
-
-    def sinusoid(t, mag, freq, phase):
-        return mag * np.sin(t * 2*np.pi*freq + 2*np.pi*phase)
-    p0 = [1, 1, 0]
+    def sinusoid(t, freq, phase, dt=dt):  # mag
+        return f.filt(np.sin(t * 2*np.pi*freq + 2*np.pi*phase), dt=dt)
+    p0 = [1, 0]  # [1, 1, 0]
     bounds = ((0, 0, 0), (2, 2, 1))
-    param_0, _ = curve_fit(sinusoid, times, x[:,0], p0=p0, bounds=bounds)
-    param_1, _ = curve_fit(sinusoid, times, x[:,1], p0=p0, bounds=bounds)
-    freq_error = nrmse(np.array([param_0[1], param_1[1]]), target=np.array([freq, freq]))
-        
+    param_0, _ = curve_fit(sinusoid, times[1000:], xhat_ens_0[1000:], p0=p0)  # , bounds=bounds
+    param_1, _ = curve_fit(sinusoid, times[1000:], xhat_ens_1[1000:], p0=p0)  # , bounds=bounds
+    print('param0', param_0)
+    print('param1', param_1)
+    sinusoid_0 = sinusoid(times, param_0[0], param_0[1])
+    sinusoid_1 = sinusoid(times, param_1[0], param_1[1])
+
+    # error is nrmse of xhat and best fit sinusoid times freq error of best fit sinusoid to x
+    freq_error_0 = np.abs(freq - param_0[1])
+    freq_error_1 = np.abs(freq - param_1[1])
+    nrmse_0 = nrmse(xhat_ens_0[1000:], target=sinusoid_0[1000:])
+    nrmse_1 = nrmse(xhat_ens_1[1000:], target=sinusoid_1[1000:])
+    scaled_nrmse_0 = (1+freq_error_0) * nrmse_0
+    scaled_nrmse_1 = (1+freq_error_1) * nrmse_1
 
     fig, ax = plt.subplots()
-    ax.plot(times, x, linestyle="--", label='x')
-    ax.plot(times, xhat_ens, label='ens, freq_error=%.3f' %freq_error)
-    ax.set(xlim=((10, 15)), ylim=((-1, 1)), xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="ens_ens")
+    ax.plot(times[1000:], x_0[1000:], linestyle="--", label='x0')
+    ax.plot(times[1000:], sinusoid_0[1000:], label='best fit sinusoid_0')
+    ax.plot(times[1000:], xhat_ens_0[1000:], label='ens, scaled nrmse=%.3f' %scaled_nrmse_0)
+    ax.set(xlim=((1, 11)), ylim=((-1, 1)), xlabel='time (s)', ylabel=r'$\mathbf{x}$')
     plt.legend(loc='upper right')
-    plt.savefig("plots/oscillate_%s_test.pdf"%neuron_type)
-
-    print('freq_error: ', freq_error)
+    plt.savefig("plots/oscillate_%s_test_0.pdf"%neuron_type)
+    
     fig, ax = plt.subplots()
-    sns.barplot(data=np.array([freq_error]))
-    ax.set(ylabel='Frequency Error', title="mean=%.3f"%freq_error)
+    ax.plot(times[1000:], x_1[1000:], linestyle="--", label='x1')
+    ax.plot(times[1000:], sinusoid_1[1000:], label='best fit sinusoid_1')
+    ax.plot(times[1000:], xhat_ens_1[1000:], label='ens, scaled nrmse=%.3f' %scaled_nrmse_1)
+    ax.set(xlim=((1, 11)), ylim=((-1, 1)), xlabel='time (s)', ylabel=r'$\mathbf{x}$')
+    plt.legend(loc='upper right')
+    plt.savefig("plots/oscillate_%s_test_1.pdf"%neuron_type)
+
+    print('scaled nrmses: ', scaled_nrmse_0, scaled_nrmse_1)
+    mean = np.mean([scaled_nrmse_0, scaled_nrmse_1])
+    fig, ax = plt.subplots()
+    sns.barplot(data=np.array([mean]))
+    ax.set(ylabel='Scaled NRMSE', title="mean=%.3f"%mean)
     plt.xticks()
-    plt.savefig("plots/oscillate_%s_freq_error.pdf"%neuron_type)
-    np.savez('data/oscillate_%s_results.npz'%neuron_type, freq_error=freq_error)
-    return freq_error
+    plt.savefig("plots/oscillate_%s_scaled_nrmse.pdf"%neuron_type)
+    np.savez('data/oscillate_%s_results.npz'%neuron_type, scaled_nrmse_0=scaled_nrmse_0, scaled_nrmse_1=scaled_nrmse_1)
+    return mean
 
 
-freq_error_lif = run(t=50, t_test=50, neuron_type=LIF(), reg=1e-1)
-# freq_error_alif = run(t=50, t_test=50, neuron_type=AdaptiveLIFT(), reg=1e-1)
-# freq_error_wilson = run(t=50, t_test=50, dt=0.00005, neuron_type=WilsonEuler(), reg=1e-1)
+scaled_nrmse_lif = run(neuron_type=LIF())
+scaled_nrmse_alif = run(neuron_type=AdaptiveLIFT())
+scaled_nrmse_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
 
 # errors = np.vstack((freq_error_lif, freq_error_alif, freq_error_wilson, freq_error_durstewitz))
 # nt_names =  ['LIF', 'ALIF', 'Wilson', 'Durstewitz']

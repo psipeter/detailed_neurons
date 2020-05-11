@@ -333,27 +333,13 @@ class WilsonRungeKutta(NeuronType):
         return spiked, V, R, H
 
 
-@Builder.register(WilsonRungeKutta)
-def build_wilsonneuron(model, neuron_type, neurons):
-    model.sig[neurons]['voltage'] = Signal(
-        neuron_type._v0*np.ones(neurons.size_in), name="%s.voltage" % neurons)
-    model.sig[neurons]['recovery'] = Signal(
-        neuron_type._r0*np.ones(neurons.size_in), name="%s.recovery" % neurons)
-    model.sig[neurons]['conductance'] = Signal(
-        np.zeros(neurons.size_in), name="%s.conductance" % neurons)
-    model.add_op(SimNeurons(
-        neurons=neuron_type,
-        J=model.sig[neurons]['in'],
-        output=model.sig[neurons]['out'],
-        states=[model.sig[neurons]['voltage'],
-                model.sig[neurons]['recovery'],
-                model.sig[neurons]['conductance']]))
+
 
 class DurstewitzNeuron(NeuronType):
 
     probeable = ('spikes', 'voltage')
 
-    def __init__(self, DA=1.0, v0=-65.0, dt_neuron=0.025):
+    def __init__(self, DA=1.0, v0=-65.0, dt_neuron=0.1):
         super(DurstewitzNeuron, self).__init__()
         self.DA = DA
         self.v0 = v0
@@ -369,16 +355,19 @@ class DurstewitzNeuron(NeuronType):
     def max_rates_intercepts(self, gain, bias):
         return self.max_rates, self.intercepts
     
-    def step_math(self, v_recs, spk_vecs, spk_recs, spk_before, voltage, spiked, time, dt):
+    def step_math(self, neurons, v_recs, spk_vecs, spk_recs, spk_before, voltage, spiked, time, dt):
         n_neurons = voltage.shape[0]
 #         spk_before = np.array([np.array(spk_vecs[n]) for n in range(n_neurons)])
         if neuron.h.t < time*1000:  # Nengo starts at t=dt
             neuron.h.tstop = time*1000
             neuron.h.continuerun(neuron.h.tstop)
         for n in range(n_neurons):
-            if not np.isfinite(v_recs[n][-1]):
-#                 warnings.warn('neuron %s returned nan voltage at t=%s' %(n, neuron.h.t*1000))
-                voltage[n] = 0
+            volts = [v_recs[n][-i] for i in range(100)] if time > 0.1 else [-65.0]
+            if np.any(np.isnan(volts)):
+#                 warnings.warn('neuron %s returned nan voltage at t=%.0f' %(n, neuron.h.t*1000))
+#                 print(volts)
+#                 neurons[n].set_v(-65.0)
+                voltage[n] = -65
             else:
                 voltage[n] = v_recs[n][-1]
         spk_after = [list(spk_vecs[n]) for n in range(n_neurons)]
@@ -397,25 +386,29 @@ class SimNeuronNeurons(Operator):
         self.updates = []
         self.incs = []
         self.v_recs = []
+#         self.v2_recs = []
         self.spk_vecs = []
         self.spk_recs = []
         self.spk_before = [[] for n in range(n_neurons)]
         for n in range(n_neurons):
             self.v_recs.append(neuron.h.Vector())
-            self.v_recs[n].record(self.neurons[n].soma(0.5)._ref_v, dt*1000)
+#             self.v2_recs.append(neuron.h.Vector())
+            self.v_recs[n].record(self.neurons[n].soma(0.5)._ref_v)
+#             self.v2_recs[n].record(self.neurons[n].basal(0.5)._ref_v, dt*1000)
             self.spk_vecs.append(neuron.h.Vector())
             self.spk_recs.append(neuron.h.APCount(self.neurons[n].soma(0.5)))
-            self.spk_recs[n].record(neuron.h.ref(self.spk_vecs[n]), dt*1000)
+            self.spk_recs[n].record(neuron.h.ref(self.spk_vecs[n]))
         neuron.h.dt = self.neuron_type.dt_neuron
         neuron.h.tstop = 0
     def make_step(self, signals, dt, rng):
         J = signals[self.current]
         output = signals[self.output]
         voltage = signals[self.voltage]
+#         voltage2 = signals[self.voltage2]
         time = signals[self.time]
         def step_nrn():
             self.neuron_type.step_math(
-                self.v_recs, self.spk_vecs, self.spk_recs, self.spk_before,
+                self.neurons, self.v_recs, self.spk_vecs, self.spk_recs, self.spk_before,
                 voltage, output, time, dt)
         return step_nrn
     @property
@@ -430,6 +423,9 @@ class SimNeuronNeurons(Operator):
     @property
     def voltage(self):
         return self.sets[1]
+#     @property
+#     def voltage2(self):
+#         return self.sets[2]
 
 class TransmitSpikes(Operator):
     def __init__(self, neurons, netcons, spikes, states, dt):
@@ -494,6 +490,8 @@ def build_connection(model, conn):
             conn.synapses = np.zeros((pre_obj.n_neurons, post_obj.n_neurons), dtype=list)
             conn.netcons = np.zeros((pre_obj.n_neurons, post_obj.n_neurons), dtype=list)
             conn.weights = np.zeros((pre_obj.n_neurons, post_obj.n_neurons))
+            conn.v_recs = []
+#             conn.v2_recs = []
             transform = full_transform(conn, slice_pre=False)
             eval_points, d, solver_info = model.build(conn.solver, conn, conn.rng, transform)
             conn.d = d.T
@@ -521,6 +519,10 @@ def build_connection(model, conn):
                 conn.synapses[pre, post] = syn
                 conn.netcons[pre, post] = neuron.h.NetCon(None, conn.synapses[pre, post])
                 conn.netcons[pre, post].weight[0] = np.abs(conn.weights[pre, post])
+            conn.v_recs.append(neuron.h.Vector())
+#             conn.v2_recs.append(neuron.h.Vector())
+            conn.v_recs[post].record(nrn.soma(0.5)._ref_v)
+#             conn.v2_recs[post].record(nrn.basal(0.5)._ref_v, model.dt*1000)
         transmitspike = TransmitSpikes(model.params[post_obj.neurons], conn.netcons,
             model.sig[conn.pre_obj]['out'], states=[model.time], dt=model.dt)
         model.add_op(transmitspike)
@@ -541,6 +543,8 @@ def reset_neuron(sim, model):
         if isinstance(op, SimNeuronNeurons):
             for v_rec in op.v_recs:
                 v_rec.play_remove()
+#             for v_rec in op.v2_recs:
+#                 v_rec.play_remove()
             for spk_vec in op.spk_vecs:
                 spk_vec.play_remove()
             del(op.neurons)
@@ -548,6 +552,11 @@ def reset_neuron(sim, model):
             del(op.neurons)
             del(op.netcons)
     for conn in model.connections:
+        if hasattr(conn, 'v_recs'):
+            for v_rec in conn.v_recs:
+                v_rec.play_remove()
+#             for v_rec in conn.v2_recs:
+#                 v_rec.play_remove()
         if hasattr(conn, 'synapses'):
             del(conn.synapses)
         if hasattr(conn, 'netcons'):
@@ -607,10 +616,27 @@ def build_wilsonneuron(model, neuron_type, neurons):
             model.sig[neurons]['conductance'],
             model.sig[neurons]['AP']]))
 
+@Builder.register(WilsonRungeKutta)
+def build_wilsonneuron(model, neuron_type, neurons):
+    model.sig[neurons]['voltage'] = Signal(
+        neuron_type._v0*np.ones(neurons.size_in), name="%s.voltage" % neurons)
+    model.sig[neurons]['recovery'] = Signal(
+        neuron_type._r0*np.ones(neurons.size_in), name="%s.recovery" % neurons)
+    model.sig[neurons]['conductance'] = Signal(
+        np.zeros(neurons.size_in), name="%s.conductance" % neurons)
+    model.add_op(SimNeurons(
+        neurons=neuron_type,
+        J=model.sig[neurons]['in'],
+        output=model.sig[neurons]['out'],
+        states=[model.sig[neurons]['voltage'],
+                model.sig[neurons]['recovery'],
+                model.sig[neurons]['conductance']]))
+    
 @Builder.register(DurstewitzNeuron)
 def build_neuronneuron(model, neuron_type, neurons):
     model.sig[neurons]['voltage'] = Signal(
-        neuron_type.v0*np.ones(neurons.size_in), name="%s.voltage"%neurons)
+#         neuron_type.v0*np.ones(neurons.size_in), name="%s.voltage"%neurons)
+        np.random.RandomState(seed=0).uniform(-75, -35, neurons.size_in), name="%s.voltage"%neurons)
     neuronop = SimNeuronNeurons(
         neuron_type=neuron_type,
         n_neurons=neurons.size_in,

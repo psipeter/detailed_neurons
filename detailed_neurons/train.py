@@ -250,7 +250,7 @@ def dh_lstsq(stim_data, target_data, spk_data,
     return d_new, h_new
 
 class LearningNode(nengo.Node):
-    def __init__(self, N, N_pre, dim, conn, k=1e-5, w_max=1e-1, decay=lambda t: 1, seed=0):
+    def __init__(self, N, N_pre, dim, conn, k=1e-5, w_max=2e-4, decay=lambda t: 1, seed=0):
         self.N = N
         self.N_pre = N_pre
         self.dim = dim
@@ -270,6 +270,7 @@ class LearningNode(nengo.Node):
         a_supv = x[self.N_pre+self.N:]
         u = x[-self.dim:]
         pre = self.rng.randint(0, self.conn.weights.shape[0])
+#         print(np.sum(self.conn.e))
         for post in range(self.conn.weights.shape[1]):
             delta_a = a_bio[post] - a_supv[post]
             # if a_bio[post] == 0 or a_supv[post] == 0:
@@ -284,12 +285,57 @@ class LearningNode(nengo.Node):
             self.conn.weights[pre, post] = np.dot(self.conn.d[pre], self.conn.e[pre, post])
             if self.conn.weights[pre, post] > self.w_max:
                 self.conn.weights[pre, post] = self.w_max
+                self.conn.e[pre, post] *= 0.8
             if self.conn.weights[pre, post] < -self.w_max:
                 self.conn.weights[pre, post] = -self.w_max
+                self.conn.e[pre, post] *= 0.8
 #                 self.conn.weights[pre, post] += delta_a * -self.k * a_pre[pre]
             self.conn.netcons[pre, post].weight[0] = np.abs(self.conn.weights[pre, post])
             # print(np.abs(self.conn.weights[pre, post]))
             self.conn.netcons[pre, post].syn().e = 0.0 if self.conn.weights[pre, post] > 0 else -70.0
+        return
+    
+    
+class LearningNode2(nengo.Node):
+    def __init__(self, N, N_pre, conn, k=1e-5, seed=0):
+        self.N = N
+        self.N_pre = N_pre
+        self.conn = conn
+        self.check = 10
+        self.size_in = 2*N+N_pre
+        self.size_out = 0
+        self.k = k
+        self.rng = np.random.RandomState(seed=seed)
+        super(LearningNode2, self).__init__(
+            self.step, size_in=self.size_in, size_out=self.size_out)
+    def step(self, t, x):
+        if t < 0.01: return
+        a_pre = x[:self.N_pre]
+        a_bio = x[self.N_pre: self.N_pre+self.N]
+        a_supv = x[self.N_pre+self.N:]
+        pre = self.rng.randint(0, self.conn.weights.shape[0])
+        for post in range(self.conn.weights.shape[1]):
+            volts = np.array([self.conn.v_recs[post][-n] for n in range(self.check)])
+#             volts2 = np.array([self.conn.v2_recs[post][-n] for n in range(self.check)])
+            if np.any(np.isnan(volts)):  # crash check
+#                 print('volts', volts[-1])
+                continue  # no weight update
+            elif a_bio[post] > 40: # oversaturation condition 1
+                for pp in range(self.conn.weights.shape[0]):
+                    self.conn.e[pp, post] *= 0.9
+            elif len(np.where((volts > -40) & (volts < 5))[0]) == self.check:  # oversaturation condition 2
+                for pp in range(self.conn.weights.shape[0]):
+                    self.conn.e[pp, post] *= 0.9
+            else:  # encoder/weight update
+                delta_a = a_bio[post] - a_supv[post]
+                for dim in range(self.conn.d.shape[1]):
+                    sign = -1 if self.conn.d[pre, dim] >= 0 else 1
+                    delta_e = sign * self.k * a_pre[pre]
+                    self.conn.e[pre, post, dim] += delta_a * delta_e
+            w = np.dot(self.conn.d[pre], self.conn.e[pre, post])
+            self.conn.weights[pre, post] = w 
+            self.conn.netcons[pre, post].weight[0] = np.abs(w)
+            self.conn.netcons[pre, post].syn().e = 0.0 if w > 0 else -70.0
         return
     
 #     # optimize T_ff by trying sample values and seeing if any decoders d_out will match target=x=integral(u)
@@ -392,3 +438,92 @@ class LearningNode(nengo.Node):
 #         ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="supervised")
 #         plt.legend(loc='upper right')
 #         plt.savefig("plots/integrate_%s_ens_train.pdf"%neuron_type)
+
+
+#             target = np.zeros((n_trains*int(t/dt), 1))
+#             spikes = np.zeros((n_trains*int(t/dt), n_neurons))
+#             for n in range(n_trains):
+#                 stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=1, f=f, normed='x', seed=n)
+#                 data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T_ff=T_ff, T_fb=1.0, w_ff=w_ff_small, w_fb=w_fb)
+#                 target[n*int(t/dt): (n+1)*int(t/dt)] = data['x']
+#                 spikes[n*int(t/dt): (n+1)*int(t/dt)] = data['ens']
+#             print('optimizing readout decoders')
+#             d_out, f_out, taus_out = df_opt(target, spikes, f, dt=dt, penalty=penalty, reg=reg, name='integrate_%s'%neuron_type)
+#             np.savez('data/integrate_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out=d_out, taus_out=taus_out)
+
+#     if readout:
+#         if load_fd:
+#             load = np.load(load_fd)
+#             d_out = load['d_out']
+#             taus_out = load['taus_out']
+#             f_out = DoubleExp(taus_out[0], taus_out[1])
+#         else:
+#             print('optimizing readout decoders')
+#             stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=n_trains, f=f, normed='x', seed=0)
+#             data = go(d_ens, f_ens, n_neurons=n_neurons, t=t*n_trains, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T_ff=T_ff, T_fb=1.0, w_ff=w_ff_small, w_ff2=w_ff_large, w_fb=w_fb, supervised=True)
+#             target = f.filt(data['x'], dt=dt)
+#     #             target = f.filt(f.filt(data['x']))
+#             spikes = data['ens']
+#             d_out, f_out, taus_out = df_opt(target, spikes, f, dt=dt, penalty=penalty, reg=reg, name='integrate_%s'%neuron_type)
+#             np.savez('data/integrate_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out=d_out, taus_out=taus_out)
+
+#             times = np.arange(0, 1, 0.0001)
+#             fig, ax = plt.subplots()
+#             ax.plot(times, f.impulse(len(times), dt=0.0001), label=r"$f^x, \tau_1=%.3f, \tau_2=%.3f$" %(-1./f.poles[0], -1./f.poles[1]))
+#             ax.plot(times, f_out.impulse(len(times), dt=0.0001), label=r"$f^{out}, \tau_1=%.3f, \tau_2=%.3f, d: %s/%s$"
+#                %(-1./f_out.poles[0], -1./f_out.poles[1], np.count_nonzero(d_out), n_neurons))
+#             ax.set(xlabel='time (seconds)', ylabel='impulse response', ylim=((0, 10)))
+#             ax.legend(loc='upper right')
+#             plt.tight_layout()
+#             plt.savefig("plots/integrate_%s_filters_out.pdf"%neuron_type)
+
+#             a_ens = f_out.filt(spikes, dt=dt)
+#             target = f.filt(target, dt=dt)
+#             xhat_ens = np.dot(a_ens, d_out)
+#             nrmse_ens = nrmse(xhat_ens, target=target)
+#             fig, ax = plt.subplots()
+#             ax.plot(dt*np.arange(0, len(target), 1), target, linestyle="--", label='target')
+#             ax.plot(dt*np.arange(0, len(target), 1), xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
+#             ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="train readout")
+#             plt.legend(loc='upper right')
+#             plt.savefig("plots/integrate_x_%s_ens_train_readout.pdf"%neuron_type)
+#     else:
+#         d_out = d_ens
+#         f_out = f_ens
+
+
+
+
+#     print('gathering training data for readout filters and decoders')
+#     data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type,
+#         f_smooth=f_smooth, w_pre=w_pre, w_ens=w_ens)
+#     d_out, f_out1, taus_out = df_opt(data['u'][10000:], data['ens'][10000:], f_out, dt=dt, name='oscillate_out_%s'%neuron_type, reg=reg, penalty=0)
+#     np.savez('data/oscillate_%s_df.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out=d_out, taus_out=taus_out)
+
+#     fig, ax = plt.subplots()
+#     sns.distplot(d_out.ravel())
+#     ax.set(xlabel='decoders', ylabel='frequency')
+#     plt.savefig("plots/oscillate_%s_d_out.pdf"%neuron_type)
+
+#     times = np.arange(0, 1, 0.0001)
+#     fig, ax = plt.subplots()
+#     ax.plot(times, f_out.impulse(len(times), dt=0.0001), label=r"$f^{out}, \tau_1=%.3f, \tau_2=%.3f$"
+#         %(-1./f_out.poles[0], -1./f_out.poles[1]))
+#     ax.plot(times, f_out1.impulse(len(times), dt=0.0001), label=r"$f^{out1}, \tau_1=%.3f, \tau_2=%.3f, d: %s/%s$"
+#        %(-1./f_out1.poles[0], -1./f_out1.poles[1], np.count_nonzero(d_out), n_neurons))
+#     ax.set(xlabel='time (seconds)', ylabel='impulse response', ylim=((0, 10)))
+#     ax.legend(loc='upper right')
+#     plt.tight_layout()
+#     plt.savefig("plots/oscillate_%s_filters_out.pdf"%neuron_type)
+
+#     x = f_out.filt(data['u'], dt=dt)[10000:]
+#     a_ens = f_out1.filt(data['ens'], dt=dt)
+#     xhat_ens = np.dot(a_ens, d_out)[10000:]
+#     nrmse_ens = nrmse(xhat_ens, target=x)
+#     fig, ax = plt.subplots()
+#     ax.plot(data['times'][10000:], x, linestyle="--", label='x')
+#     ax.plot(data['times'][10000:], xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
+#     ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="ens_ens")
+#     plt.legend(loc='upper right')
+#     plt.savefig("plots/oscillate_%s_train.pdf"%neuron_type)
+    

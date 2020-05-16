@@ -190,7 +190,7 @@ def go(d_ens, f_ens, n_neurons=30, n_pre=300, t=10, m=Uniform(20, 40), i=Uniform
     )
 
 
-def run(n_neurons=30, t=10, t_test=10, dt=0.001, n_trains=10, n_encodes=30, n_tests=10, neuron_type=LIF(), f=DoubleExp(1e-3, 2e-1), load_w=None, load_fd=None, load_w_x=False, load_w_u=False, load_w_fb=False, reg=1e-1, penalty=0.0, T=0.2, supervised=False):
+def run(n_neurons=30, t=30, t_test=10, dt=0.001, n_trains=10, n_encodes=10, n_tests=10, neuron_type=LIF(), f=DoubleExp(1e-3, 2e-1), load_w=None, load_fd=None, load_w_x=False, load_w_u=False, load_w_fb=False, reg=1e-1, penalty=0.0, T=0.2, supervised=False):
             
     d_ens = np.zeros((n_neurons, 1))
     f_ens = f
@@ -209,99 +209,76 @@ def run(n_neurons=30, t=10, t_test=10, dt=0.001, n_trains=10, n_encodes=30, n_te
             e_x = np.load(load_w)['e_x']      
         else:
             print('optimizing encoders from pre_x into ens (white noise)')
-            stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=n_encodes, f=f, normed='x')
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t*n_encodes, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T=T, e_x=e_x, L_x=True)
-            w_x = data['w_x']
-            e_x = data['e_x']
-            np.savez('data/integrate_w.npz', w_x=w_x, e_x=e_x)
+            for nenc in range(n_encodes):
+                print("encoding trial %s"%nenc)
+                stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=1, f=f, normed='x', seed=nenc)
+                data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T=T, e_x=e_x, L_x=True)
+                w_x = data['w_x']
+                e_x = data['e_x']
+                np.savez('data/integrate_w.npz', w_x=w_x, e_x=e_x)
 
-            fig, ax = plt.subplots()
-            sns.distplot(np.ravel(w_x), ax=ax, kde=False)
-            ax.set(xlabel='weights', ylabel='frequency')
-            plt.savefig("plots/integrate_%s_w_x.pdf"%neuron_type)
+                fig, ax = plt.subplots()
+                sns.distplot(np.ravel(w_x), ax=ax, kde=False)
+                ax.set(xlabel='weights', ylabel='frequency')
+                plt.savefig("plots/tuning/integrate_%s_nenc_%s_w_x.pdf"%(neuron_type, nenc))
 
-            a_ens = f_smooth.filt(data['ens'], dt=dt)
-            a_supv = f_smooth.filt(data['supv'], dt=dt)
-            for n in range(n_neurons):
-                fig, (ax, ax2) = plt.subplots(2, 1)
-                ax.plot(data['times'][:20000], a_supv[:,n][:20000], alpha=0.5, label='supv')
-                ax.plot(data['times'][:20000], a_ens[:,n][:20000], alpha=0.5, label='ens')
-                ax.set(ylim=((0, 40)))
-                ax2.plot(data['times'][-20000:], a_supv[:,n][-20000:], alpha=0.5, label='supv')
-                ax2.plot(data['times'][-20000:], a_ens[:,n][-20000:], alpha=0.5, label='ens')
-                ax2.set(xlabel='time', ylabel='Firing Rate', ylim=((0, 40)))
-                plt.legend()
-                plt.savefig('plots/tuning/integrate_pre_x_ens_activity_%s.pdf'%n)
-                plt.close('all')
+                a_ens = f_smooth.filt(data['ens'], dt=dt)
+                a_supv = f_smooth.filt(data['supv'], dt=dt)
+                for n in range(n_neurons):
+                    fig, ax = plt.subplots(1, 1)
+                    ax.plot(data['times'], a_supv[:,n], alpha=0.5, label='supv')
+                    ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens')
+                    ax.set(ylim=((0, 40)))
+                    plt.legend()
+                    plt.savefig('plots/tuning/integrate_pre_x_ens_nenc_%s_activity_%s.pdf'%(nenc, n))
+                    plt.close('all')
 
-            for n in range(n_neurons):
-                volt = data['v'][:,n]
-                fig, ax, = plt.subplots(1, 1)
-                ax.plot(data['times'], data['v'][:,n])
-                ax.set(xlabel='time', ylabel='voltage')
-                plt.savefig('plots/tuning/integrate_pre_x_voltage_%s.pdf'%n)
-                plt.close('all')
-                
-#             print('optimizing encoders from pre_x into ens (zero)')
-#             eval_points = np.linspace(-1, 1, 5)
-#             for value in eval_points:
-#                 stim_func = lambda t: value * (t < 1)
-# #                 stim_func = lambda t: 0
-#                 for rep in range(3):
-#                     data = go(d_ens, f_ens, n_neurons=n_neurons, t=5, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T=T, e_x=e_x, L_x=True)
-#                     w_x = data['w_x']
-#                     e_x = data['e_x']
-#                     np.savez('data/integrate_w.npz', w_x=w_x, e_x=e_x)
-#                     a_ens = f_smooth.filt(data['ens'], dt=dt)
-#                     a_supv = f_smooth.filt(data['supv'], dt=dt)
-#                     for n in range(n_neurons):
-#                         fig, ax = plt.subplots(1, 1)
-#                         ax.plot(data['times'], a_supv[:,n], alpha=0.5, label='supv')
-#                         ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens')
-#                         ax.set(ylim=((0, 40)))
-#                         plt.legend()
-#                         plt.savefig('plots/tuning/integrate_pre_x_zero_activity_%s.pdf'%n)
-#                         plt.close('all')
+#                 for n in range(n_neurons):
+#                     volt = data['v'][:,n]
+#                     fig, ax, = plt.subplots(1, 1)
+#                     ax.plot(data['times'], data['v'][:,n])
+#                     ax.set(xlabel='time', ylabel='voltage')
+#                     plt.savefig('plots/tuning/integrate_pre_x_voltage_%s.pdf'%n)
+#                     plt.close('all')
 
         if load_w_u:
             w_u = np.load(load_w)['w_u']
             e_u = np.load(load_w)['e_u']
         else:
             print('optimizing encoders from pre_u into ens')
-            stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=n_encodes, f=f, normed='x')
-            t_train = t*n_encodes
-            stim_func2 = lambda t: 0.5*np.sin(2*np.pi*t/t_train)
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t*n_encodes, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T=T, w_x=w_x, e_u=e_u, stim_func2=stim_func2, L_u=True)
-            w_u = data['w_u']
-            e_u = data['e_u']
-            np.savez('data/integrate_w.npz', w_x=w_x, e_x=e_x, w_u=w_u, e_u=e_u)
+            bases = np.linspace(-0.8, 0.8, n_encodes)
+            for nenc in range(n_encodes):
+                print("encoding trial %s"%nenc)
+                stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=1, f=f, normed='x', seed=nenc)
+                stim_func2 = lambda t: bases[nenc]
+                data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T=T, w_x=w_x, e_u=e_u, stim_func2=stim_func2, L_u=True)
+                w_u = data['w_u']
+                e_u = data['e_u']
+                np.savez('data/integrate_w.npz', w_x=w_x, e_x=e_x, w_u=w_u, e_u=e_u)
 
-            fig, ax = plt.subplots()
-            sns.distplot(np.ravel(w_u), ax=ax, kde=False)
-            ax.set(xlabel='weights', ylabel='frequency')
-            plt.savefig("plots/integrate_%s_w_u.pdf"%neuron_type)
+                fig, ax = plt.subplots()
+                sns.distplot(np.ravel(w_u), ax=ax, kde=False)
+                ax.set(xlabel='weights', ylabel='frequency')
+                plt.savefig("plots/tuning/integrate_%s_nenc_%s_w_u.pdf"%(neuron_type, nenc))
 
-            a_ens = f_smooth.filt(data['ens'], dt=dt)
-            a_supv = f_smooth.filt(data['supv'], dt=dt)
-            for n in range(n_neurons):
-                fig, (ax, ax2) = plt.subplots(2, 1)
-                ax.plot(data['times'][20000:40000], a_supv[:,n][20000:40000], alpha=0.5, label='supv')
-                ax.plot(data['times'][20000:40000], a_ens[:,n][20000:40000], alpha=0.5, label='ens')
-                ax.set(ylim=((0, 40)))
-                ax2.plot(data['times'][60000:80000], a_supv[:,n][60000:80000], alpha=0.5, label='supv')
-                ax2.plot(data['times'][60000:80000], a_ens[:,n][60000:80000], alpha=0.5, label='ens')
-                ax2.set(xlabel='time', ylabel='Firing Rate', ylim=((0, 40)))
-                plt.legend()
-                plt.savefig('plots/tuning/integrate_pre_u_ens_activity_%s.pdf'%n)
-                plt.close('all')
-                
-            for n in range(n_neurons):
-                volt = data['v'][:,n]
-                fig, ax, = plt.subplots(1, 1)
-                ax.plot(data['times'], data['v'][:,n])
-                ax.set(xlabel='time', ylabel='voltage')
-                plt.savefig('plots/tuning/integrate_pre_u_voltage_%s.pdf'%n)
-                plt.close('all')
+                a_ens = f_smooth.filt(data['ens'], dt=dt)
+                a_supv = f_smooth.filt(data['supv'], dt=dt)
+                for n in range(n_neurons):
+                    fig, ax = plt.subplots(1, 1)
+                    ax.plot(data['times'], a_supv[:,n], alpha=0.5, label='supv')
+                    ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens')
+                    ax.set(ylim=((0, 40)))
+                    plt.legend()
+                    plt.savefig('plots/tuning/integrate_pre_u_ens_nenc_%s_activity_%s.pdf'%(nenc, n))
+                    plt.close('all')
+
+#                 for n in range(n_neurons):
+#                     volt = data['v'][:,n]
+#                     fig, ax, = plt.subplots(1, 1)
+#                     ax.plot(data['times'], data['v'][:,n])
+#                     ax.set(xlabel='time', ylabel='voltage')
+#                     plt.savefig('plots/tuning/integrate_pre_u_voltage_%s.pdf'%n)
+#                     plt.close('all')
     
     if load_fd:
         load = np.load(load_fd)
@@ -347,66 +324,39 @@ def run(n_neurons=30, t=10, t_test=10, dt=0.001, n_trains=10, n_encodes=30, n_te
             e_fb = np.load(load_w)['e_fb']
         else:
             print('optimizing encoders from ens2 into ens')
-            stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=n_encodes, f=f, normed='x')
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t*n_encodes, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T=T, w_x=w_x, w_u=w_u, e_fb=e_fb, L_fb=True)
-            w_fb = data['w_fb']
-            e_fb = data['e_fb']
-            np.savez('data/integrate_w.npz', w_x=w_x, e_x=e_x, w_u=w_u, e_u=e_u, w_fb=w_fb, e_fb=e_fb)
+            for nenc in range(n_encodes):
+                print("encoding trial %s"%nenc)
+                stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=1, f=f, normed='x', seed=nenc)
+                data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T=T, w_x=w_x, w_u=w_u, e_fb=e_fb, L_fb=True)
+                w_fb = data['w_fb']
+                e_fb = data['e_fb']
+                np.savez('data/integrate_w.npz', w_x=w_x, e_x=e_x, w_u=w_u, e_u=e_u, w_fb=w_fb, e_fb=e_fb)
 
-            fig, ax = plt.subplots()
-            sns.distplot(np.ravel(w_fb), ax=ax, kde=False)
-            ax.set(xlabel='weights', ylabel='frequency')
-            plt.savefig("plots/integrate_%s_w_fb.pdf"%neuron_type)
+                fig, ax = plt.subplots()
+                sns.distplot(np.ravel(w_fb), ax=ax, kde=False)
+                ax.set(xlabel='weights', ylabel='frequency')
+                plt.savefig("plots/tuning/integrate_%s_nenc_%s_w_fb.pdf"%(neuron_type, nenc))
 
-            a_ens = f_smooth.filt(data['ens'], dt=dt)
-            a_ens2 = f_smooth.filt(data['ens2'], dt=dt)
-            a_supv = f_smooth.filt(data['supv'], dt=dt)
-#             a_supv2 = f_smooth.filt(data['supv2'], dt=dt)
-            for n in range(n_neurons):
-                fig, (ax, ax2) = plt.subplots(2, 1)
-                ax.plot(data['times'][:20000], a_supv[:20000,n], alpha=0.5, label='supv')
-    #                 ax.plot(data['times'][:20000], a_supv2[:20000,n], alpha=0.5, label='supv2')
-                ax.plot(data['times'][:20000], a_ens[:20000,n], alpha=0.5, label='ens')
-                ax.plot(data['times'][:20000], a_ens2[:20000,n], alpha=0.5, label='ens2')
-                ax.set(ylabel='firing rate', ylim=((0, 40)))
-                ax2.plot(data['times'][-20000:], a_supv[-20000:,n], alpha=0.5, label='supv')
-    #                 ax2.plot(data['times'][-20000:], a_supv2[-20000:,n], alpha=0.5, label='supv2')
-                ax2.plot(data['times'][-20000:], a_ens[-20000:,n], alpha=0.5, label='ens')
-                ax2.plot(data['times'][-20000:], a_ens2[-20000:,n], alpha=0.5, label='ens2')
-                ax2.set(xlabel='time', ylabel='firing rate', ylim=((0, 40)))
-                plt.legend()
-                plt.savefig('plots/tuning/integrate_ens2_ens_activity_%s.pdf'%n)
-                plt.close('all')
+                a_ens = f_smooth.filt(data['ens'], dt=dt)
+                a_ens2 = f_smooth.filt(data['ens2'], dt=dt)
+                a_supv = f_smooth.filt(data['supv'], dt=dt)
+    #             a_supv2 = f_smooth.filt(data['supv2'], dt=dt)
+                for n in range(n_neurons):
+                    fig, ax = plt.subplots(1, 1)
+                    ax.plot(data['times'], a_supv[:,n], alpha=0.5, label='supv')
+                    ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens')
+                    ax.plot(data['times'], a_ens2[:,n], alpha=0.5, label='ens2')
+                    ax.set(ylabel='firing rate', ylim=((0, 40)))
+                    plt.legend()
+                    plt.savefig('plots/tuning/integrate_ens2_ens_nenc_%s_activity_%s.pdf'%(nenc, n))
+                    plt.close('all')
 
-            for n in range(n_neurons):
-                fig, ax, = plt.subplots(1, 1)
-                ax.plot(data['times'], data['v'][:,n])
-                ax.set(xlabel='time', ylabel='voltage')
-                plt.savefig('plots/tuning/integrate_ens2_ens_voltage_%s.pdf'%n)
-                plt.close('all')
-                
-#             print('optimizing encoders from ens2 into ens (eval points)')
-#             eval_points = np.linspace(-1, 1, 5)
-#             for value in eval_points:
-#                 stim_func = lambda t: value * (t < 1)
-# #                 stim_func = lambda t: 0
-#                 for rep in range(3):
-#                     data = go(d_ens, f_ens, n_neurons=n_neurons, t=5, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T=T, w_x=w_x, w_u=w_u, e_fb=e_fb, L_fb=True)
-#                     w_fb = data['w_fb']
-#                     e_fb = data['e_fb']
-#                     np.savez('data/integrate_w.npz', w_x=w_x, e_x=e_x, w_u=w_u, e_u=e_u, w_fb=w_fb, e_fb=e_fb)
-#                     a_ens = f_smooth.filt(data['ens'], dt=dt)
-#                     a_ens2 = f_smooth.filt(data['ens2'], dt=dt)
-#                     a_supv = f_smooth.filt(data['supv'], dt=dt)
-#                     for n in range(n_neurons):
-#                         fig, ax = plt.subplots(1, 1)
-#                         ax.plot(data['times'], a_supv[:,n], alpha=0.5, label='supv')
-#                         ax.plot(data['times'], a_ens2[:,n], alpha=0.5, label='ens2')
-#                         ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens')
-#                         ax.set(ylim=((0, 40)))
-#                         plt.legend()
-#                         plt.savefig('plots/tuning/integrate_ens_ens2_zero_activity_%s.pdf'%n)
-#                         plt.close('all')
+#                 for n in range(n_neurons):
+#                     fig, ax, = plt.subplots(1, 1)
+#                     ax.plot(data['times'], data['v'][:,n])
+#                     ax.set(xlabel='time', ylabel='voltage')
+#                     plt.savefig('plots/tuning/integrate_ens2_ens_voltage_%s.pdf'%n)
+#                     plt.close('all')
 
     nrmses_ens = np.zeros((n_tests))
     for test in range(n_tests):
@@ -528,8 +478,8 @@ def run(n_neurons=30, t=10, t_test=10, dt=0.001, n_trains=10, n_encodes=30, n_te
         np.savez('data/integrate_%s_results.npz'%neuron_type, nrmses_ens=nrmses_ens)
         return nrmses_ens
 
-# nrmses_lif = run(neuron_type=LIF())
-# nrmses_alif = run(neuron_type=AdaptiveLIFT())
+nrmses_lif = run(neuron_type=LIF())
+nrmses_alif = run(neuron_type=AdaptiveLIFT())
 # nrmses_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
 nrmses_durstewitz = run(neuron_type=DurstewitzNeuron(0.0))
 

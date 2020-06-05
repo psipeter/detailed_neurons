@@ -28,7 +28,8 @@ import warnings
 
 import neuron
 neuron.h.load_file('stdrun.hoc')
-neuron.h.load_file('NEURON/durstewitzDA.hoc')
+neuron.h.load_file('NEURON/durstewitzDArandom.hoc')
+# neuron.h.load_file('NEURON/durstewitzDA.hoc')
 # neuron.h.load_file('NEURON/durstewitz.hoc')
 
 
@@ -339,10 +340,9 @@ class DurstewitzNeuron(NeuronType):
 
     probeable = ('spikes', 'voltage')
 
-    def __init__(self, DA=1.0, v0=-65.0, dt_neuron=0.1):
+    def __init__(self, DA=0.0, dt_neuron=0.1):
         super(DurstewitzNeuron, self).__init__()
         self.DA = DA
-        self.v0 = v0
         self.dt_neuron = dt_neuron
         self.max_rates = np.array([])
         self.intercepts = np.array([])
@@ -379,22 +379,31 @@ class SimNeuronNeurons(Operator):
     def __init__(self, neuron_type, n_neurons,  J, output, states, dt):
         super(SimNeuronNeurons, self).__init__()
         self.neuron_type = neuron_type
-#         self.neurons = [neuron.h.Durstewitz() for n in range(n_neurons)]
-        self.neurons = [neuron.h.DurstewitzDA(neuron_type.DA) for n in range(n_neurons)]
+#         self.neurons = [neuron.h.DurstewitzDA(neuron_type.DA) for n in range(n_neurons)]
+        rng = np.random.RandomState(seed=0)
+        DAs = [neuron_type.DA for n in range(n_neurons)]
+        rGeos = rng.normal(1, 0.1, size=(n_neurons,))
+        rCms = rng.normal(1, 0.1, size=(n_neurons,))
+        rNAfs = rng.normal(1, 0.005, size=(n_neurons,))
+        rNaps = rng.normal(1, 0.005, size=(n_neurons,))
+        rHvas = rng.normal(1, 0.005, size=(n_neurons,))
+        rKdrs = rng.normal(1, 0.005, size=(n_neurons,))
+        rIKs = rng.normal(1, 0.005, size=(n_neurons,))
+        rICs = rng.normal(1, 0.005, size=(n_neurons,))
+        self.neurons = [neuron.h.DurstewitzDArandom(
+            DAs[n], rGeos[n], rCms[n], rNAfs[n], rHvas[n], rNaps[n], rKdrs[n], rIKs[n], rICs[n])
+            for n in range(n_neurons)]
         self.reads = [states[0], J]
         self.sets = [output, states[1]]
         self.updates = []
         self.incs = []
         self.v_recs = []
-#         self.v2_recs = []
         self.spk_vecs = []
         self.spk_recs = []
         self.spk_before = [[] for n in range(n_neurons)]
         for n in range(n_neurons):
             self.v_recs.append(neuron.h.Vector())
-#             self.v2_recs.append(neuron.h.Vector())
             self.v_recs[n].record(self.neurons[n].soma(0.5)._ref_v)
-#             self.v2_recs[n].record(self.neurons[n].basal(0.5)._ref_v, dt*1000)
             self.spk_vecs.append(neuron.h.Vector())
             self.spk_recs.append(neuron.h.APCount(self.neurons[n].soma(0.5)))
             self.spk_recs[n].record(neuron.h.ref(self.spk_vecs[n]))
@@ -404,7 +413,6 @@ class SimNeuronNeurons(Operator):
         J = signals[self.current]
         output = signals[self.output]
         voltage = signals[self.voltage]
-#         voltage2 = signals[self.voltage2]
         time = signals[self.time]
         def step_nrn():
             self.neuron_type.step_math(
@@ -423,9 +431,6 @@ class SimNeuronNeurons(Operator):
     @property
     def voltage(self):
         return self.sets[1]
-#     @property
-#     def voltage2(self):
-#         return self.sets[2]
 
 class TransmitSpikes(Operator):
     def __init__(self, neurons, netcons, spikes, states, dt):
@@ -491,7 +496,6 @@ def build_connection(model, conn):
             conn.netcons = np.zeros((pre_obj.n_neurons, post_obj.n_neurons), dtype=list)
             conn.weights = np.zeros((pre_obj.n_neurons, post_obj.n_neurons))
             conn.v_recs = []
-#             conn.v2_recs = []
             transform = full_transform(conn, slice_pre=False)
             eval_points, d, solver_info = model.build(conn.solver, conn, conn.rng, transform)
             conn.d = d.T
@@ -520,9 +524,7 @@ def build_connection(model, conn):
                 conn.netcons[pre, post] = neuron.h.NetCon(None, conn.synapses[pre, post])
                 conn.netcons[pre, post].weight[0] = np.abs(conn.weights[pre, post])
             conn.v_recs.append(neuron.h.Vector())
-#             conn.v2_recs.append(neuron.h.Vector())
             conn.v_recs[post].record(nrn.soma(0.5)._ref_v)
-#             conn.v2_recs[post].record(nrn.basal(0.5)._ref_v, model.dt*1000)
         transmitspike = TransmitSpikes(model.params[post_obj.neurons], conn.netcons,
             model.sig[conn.pre_obj]['out'], states=[model.time], dt=model.dt)
         model.add_op(transmitspike)
@@ -543,8 +545,6 @@ def reset_neuron(sim, model):
         if isinstance(op, SimNeuronNeurons):
             for v_rec in op.v_recs:
                 v_rec.play_remove()
-#             for v_rec in op.v2_recs:
-#                 v_rec.play_remove()
             for spk_vec in op.spk_vecs:
                 spk_vec.play_remove()
             del(op.neurons)
@@ -555,8 +555,6 @@ def reset_neuron(sim, model):
         if hasattr(conn, 'v_recs'):
             for v_rec in conn.v_recs:
                 v_rec.play_remove()
-#             for v_rec in conn.v2_recs:
-#                 v_rec.play_remove()
         if hasattr(conn, 'synapses'):
             del(conn.synapses)
         if hasattr(conn, 'netcons'):

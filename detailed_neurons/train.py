@@ -297,10 +297,11 @@ class LearningNode(nengo.Node):
     
     
 class LearningNode2(nengo.Node):
-    def __init__(self, N, N_pre, conn, k=1e-5, seed=0):
+    def __init__(self, N, N_pre, conn, conn_supv=None, k=1e-5, seed=0):
         self.N = N
         self.N_pre = N_pre
         self.conn = conn
+        self.conn_supv = conn_supv
         self.check = 10
         self.size_in = 2*N+N_pre
         self.size_out = 0
@@ -315,10 +316,13 @@ class LearningNode2(nengo.Node):
         a_supv = x[self.N_pre+self.N:]
         pre = self.rng.randint(0, self.conn.weights.shape[0])
         for post in range(self.conn.weights.shape[1]):
+            if self.conn_supv:
+                volts_supv = np.array([self.conn_supv.v_recs[post][-n] for n in range(self.check)])
+#                 print(volts_supv)
+                if np.any(np.isnan(volts_supv)):  # crash check
+                    continue  # no weight update
             volts = np.array([self.conn.v_recs[post][-n] for n in range(self.check)])
-#             volts2 = np.array([self.conn.v2_recs[post][-n] for n in range(self.check)])
             if np.any(np.isnan(volts)):  # crash check
-#                 print('volts', volts[-1])
                 continue  # no weight update
             elif a_bio[post] > 40: # oversaturation condition 1
                 for pp in range(self.conn.weights.shape[0]):
@@ -337,193 +341,3 @@ class LearningNode2(nengo.Node):
             self.conn.netcons[pre, post].weight[0] = np.abs(w)
             self.conn.netcons[pre, post].syn().e = 0.0 if w > 0 else -70.0
         return
-    
-#     # optimize T_ff by trying sample values and seeing if any decoders d_out will match target=x=integral(u)
-#     if isinstance(neuron_type, DurstewitzNeuron):
-#         print("Optimizing T_ff and d_out")
-#         hyperparams = {}
-#         hyperparams['reg'] = reg
-#         hyperparams['n_neurons'] = n_neurons
-#         hyperparams['t'] = t
-#         hyperparams['dt'] = dt
-#         hyperparams['neuron_type'] = neuron_type
-#         hyperparams['stim_func'] = stim_func
-#         hyperparams['T_ff'] = hp.uniform('T_ff', 0.1, 0.3)
-# #         hyperparams['T_ff'] = 0.175
-#         np.savez("data/Toptimize.npz", d_ens=d_ens, taus_ens=taus_ens,
-#             taus_f=np.array([-1./f.poles[0], -1./f.poles[1]]), w_pre=w_pre, w_ens=w_ens)
-
-#         def objective(hyperparams):
-#             T_ff = hyperparams['T_ff']
-#             print("testing T_ff=%.3f, T_fb=%.3f"%(T_ff, T_fb))
-#             d_ens = np.load("data/Toptimize.npz")['d_ens']
-#             f_ens = DoubleExp(np.load("data/Toptimize.npz")['taus_ens'][0], np.load("data/Toptimize.npz")['taus_ens'][1])
-#             f = DoubleExp(np.load("data/Toptimize.npz")['taus_f'][0], np.load("data/Toptimize.npz")['taus_f'][1])
-#             w_pre = np.load("data/Toptimize.npz")['w_pre']
-#             w_post = np.load("data/Toptimize.npz")['w_ens']
-#             data = go(
-#                 d_ens,
-#                 f_ens,
-#                 n_neurons=hyperparams['n_neurons'],
-#                 t=hyperparams['t'],
-#                 f=f,
-#                 dt=hyperparams['dt'],
-#                 neuron_type=hyperparams['neuron_type'],
-#                 stim_func=hyperparams['stim_func'],
-#                 T_ff=T_ff,
-#                 T_fb=1.0,
-#                 w_pre=w_pre,
-#                 w_ens=w_ens,
-#                 progress_bar=True)
-#             a_ens = f_ens.filt(data['ens'], dt=hyperparams['dt'])
-#             target = f.filt(data['x'], dt=hyperparams['dt'])
-#             d_out = nengo.solvers.LstsqL2(reg=hyperparams['reg'])(a_ens, target)[0]
-#             xhat_ens = np.dot(a_ens, d_out)
-#             loss = nrmse(xhat_ens, target=target)
-#             fig, ax = plt.subplots()
-#             ax.plot(data['times'], target, linestyle="--", label='target')
-#             ax.plot(data['times'], xhat_ens, label='ens, nrmse=%.3f' %loss)
-#             ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="unsupervised\n T_ff=%.3f"%(T_ff))
-#             plt.legend(loc='upper right')
-#             plt.savefig("plots/integrate_%s_ens_Tff_%.3f.pdf"%(neuron_type, T_ff))
-#             return {'loss': loss, 'T_ff': T_ff, 'd_out': d_out, 'status': STATUS_OK}
-
-#         trials = Trials()
-#         fmin(objective,
-#             rstate=np.random.RandomState(seed=0),
-#             space=hyperparams,
-#             algo=tpe.suggest,
-#             max_evals=T_evals,
-#             trials=trials)
-#         best_idx = np.argmin(trials.losses())
-#         best = trials.trials[best_idx]
-#         T_ff = best['result']['T_ff']
-#         d_out = best['result']['d_out']
-#         print("Final T_ff:", T_ff)
-#         print("Final d_out:", d_out)
-
-    
-#     # optimize T_ff by trying sample values and seeing if any decoders d_out will match target=x=integral(u)
-#     if isinstance(neuron_type, DurstewitzNeuron):
-#         print("Optimizing T_ff and d_out")
-#         hyperparams = {}
-#         hyperparams['reg'] = reg
-#         hyperparams['n_neurons'] = n_neurons
-#         hyperparams['t'] = t
-#         hyperparams['dt'] = dt
-#         hyperparams['neuron_type'] = neuron_type
-#         hyperparams['stim_func'] = stim_func
-#         hyperparams['T_ff'] = hp.uniform('T_ff', 0.1, 0.3)
-# #         hyperparams['T_ff'] = 0.175
-#         np.savez("data/Toptimize.npz", d_ens=d_ens, taus_ens=taus_ens,
-#         np.savez('data/integrate_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens)
-
-#         times = np.arange(0, 1, 0.0001)
-#         fig, ax = plt.subplots()
-#         ax.plot(times, f.impulse(len(times), dt=0.0001), label=r"$f^x, \tau_1=%.3f, \tau_2=%.3f$" %(-1./f.poles[0], -1./f.poles[1]))
-#         ax.plot(times, f_ens.impulse(len(times), dt=0.0001), label=r"$f^{ens}, \tau_1=%.3f, \tau_2=%.3f, d: %s/%s$"
-#            %(-1./f_ens.poles[0], -1./f_ens.poles[1], np.count_nonzero(d_ens), n_neurons))
-#         ax.set(xlabel='time (seconds)', ylabel='impulse response', ylim=((0, 10)))
-#         ax.legend(loc='upper right')
-#         plt.tight_layout()
-#         plt.savefig("plots/integrate_%s_filters_ens.pdf"%neuron_type)
-
-#         a_ens = f_ens.filt(data['ens'], dt=dt)
-#         xhat_ens = np.dot(a_ens, d_ens)
-#         target = f.filt(f.filt(data['u'], dt=dt), dt=dt)
-#         nrmse_ens = nrmse(xhat_ens, target=target)
-#         fig, ax = plt.subplots()
-#         ax.plot(data['times'], target, linestyle="--", label='target')
-#         ax.plot(data['times'], xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
-#         ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="supervised")
-#         plt.legend(loc='upper right')
-#         plt.savefig("plots/integrate_%s_ens_train.pdf"%neuron_type)
-
-
-#             target = np.zeros((n_trains*int(t/dt), 1))
-#             spikes = np.zeros((n_trains*int(t/dt), n_neurons))
-#             for n in range(n_trains):
-#                 stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=1, f=f, normed='x', seed=n)
-#                 data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T_ff=T_ff, T_fb=1.0, w_ff=w_ff_small, w_fb=w_fb)
-#                 target[n*int(t/dt): (n+1)*int(t/dt)] = data['x']
-#                 spikes[n*int(t/dt): (n+1)*int(t/dt)] = data['ens']
-#             print('optimizing readout decoders')
-#             d_out, f_out, taus_out = df_opt(target, spikes, f, dt=dt, penalty=penalty, reg=reg, name='integrate_%s'%neuron_type)
-#             np.savez('data/integrate_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out=d_out, taus_out=taus_out)
-
-#     if readout:
-#         if load_fd:
-#             load = np.load(load_fd)
-#             d_out = load['d_out']
-#             taus_out = load['taus_out']
-#             f_out = DoubleExp(taus_out[0], taus_out[1])
-#         else:
-#             print('optimizing readout decoders')
-#             stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, N=n_trains, f=f, normed='x', seed=0)
-#             data = go(d_ens, f_ens, n_neurons=n_neurons, t=t*n_trains, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, T_ff=T_ff, T_fb=1.0, w_ff=w_ff_small, w_ff2=w_ff_large, w_fb=w_fb, supervised=True)
-#             target = f.filt(data['x'], dt=dt)
-#     #             target = f.filt(f.filt(data['x']))
-#             spikes = data['ens']
-#             d_out, f_out, taus_out = df_opt(target, spikes, f, dt=dt, penalty=penalty, reg=reg, name='integrate_%s'%neuron_type)
-#             np.savez('data/integrate_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out=d_out, taus_out=taus_out)
-
-#             times = np.arange(0, 1, 0.0001)
-#             fig, ax = plt.subplots()
-#             ax.plot(times, f.impulse(len(times), dt=0.0001), label=r"$f^x, \tau_1=%.3f, \tau_2=%.3f$" %(-1./f.poles[0], -1./f.poles[1]))
-#             ax.plot(times, f_out.impulse(len(times), dt=0.0001), label=r"$f^{out}, \tau_1=%.3f, \tau_2=%.3f, d: %s/%s$"
-#                %(-1./f_out.poles[0], -1./f_out.poles[1], np.count_nonzero(d_out), n_neurons))
-#             ax.set(xlabel='time (seconds)', ylabel='impulse response', ylim=((0, 10)))
-#             ax.legend(loc='upper right')
-#             plt.tight_layout()
-#             plt.savefig("plots/integrate_%s_filters_out.pdf"%neuron_type)
-
-#             a_ens = f_out.filt(spikes, dt=dt)
-#             target = f.filt(target, dt=dt)
-#             xhat_ens = np.dot(a_ens, d_out)
-#             nrmse_ens = nrmse(xhat_ens, target=target)
-#             fig, ax = plt.subplots()
-#             ax.plot(dt*np.arange(0, len(target), 1), target, linestyle="--", label='target')
-#             ax.plot(dt*np.arange(0, len(target), 1), xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
-#             ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="train readout")
-#             plt.legend(loc='upper right')
-#             plt.savefig("plots/integrate_x_%s_ens_train_readout.pdf"%neuron_type)
-#     else:
-#         d_out = d_ens
-#         f_out = f_ens
-
-
-
-
-#     print('gathering training data for readout filters and decoders')
-#     data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type,
-#         f_smooth=f_smooth, w_pre=w_pre, w_ens=w_ens)
-#     d_out, f_out1, taus_out = df_opt(data['u'][10000:], data['ens'][10000:], f_out, dt=dt, name='oscillate_out_%s'%neuron_type, reg=reg, penalty=0)
-#     np.savez('data/oscillate_%s_df.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out=d_out, taus_out=taus_out)
-
-#     fig, ax = plt.subplots()
-#     sns.distplot(d_out.ravel())
-#     ax.set(xlabel='decoders', ylabel='frequency')
-#     plt.savefig("plots/oscillate_%s_d_out.pdf"%neuron_type)
-
-#     times = np.arange(0, 1, 0.0001)
-#     fig, ax = plt.subplots()
-#     ax.plot(times, f_out.impulse(len(times), dt=0.0001), label=r"$f^{out}, \tau_1=%.3f, \tau_2=%.3f$"
-#         %(-1./f_out.poles[0], -1./f_out.poles[1]))
-#     ax.plot(times, f_out1.impulse(len(times), dt=0.0001), label=r"$f^{out1}, \tau_1=%.3f, \tau_2=%.3f, d: %s/%s$"
-#        %(-1./f_out1.poles[0], -1./f_out1.poles[1], np.count_nonzero(d_out), n_neurons))
-#     ax.set(xlabel='time (seconds)', ylabel='impulse response', ylim=((0, 10)))
-#     ax.legend(loc='upper right')
-#     plt.tight_layout()
-#     plt.savefig("plots/oscillate_%s_filters_out.pdf"%neuron_type)
-
-#     x = f_out.filt(data['u'], dt=dt)[10000:]
-#     a_ens = f_out1.filt(data['ens'], dt=dt)
-#     xhat_ens = np.dot(a_ens, d_out)[10000:]
-#     nrmse_ens = nrmse(xhat_ens, target=x)
-#     fig, ax = plt.subplots()
-#     ax.plot(data['times'][10000:], x, linestyle="--", label='x')
-#     ax.plot(data['times'][10000:], xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
-#     ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="ens_ens")
-#     plt.legend(loc='upper right')
-#     plt.savefig("plots/oscillate_%s_train.pdf"%neuron_type)
-    

@@ -5,17 +5,37 @@ from nengo.dists import Uniform
 from nengo.solvers import NoSolver
 from nengolib import Lowpass, DoubleExp
 from nengolib.signal import s, z, nrmse, LinearSystem
-from train import d_opt, df_opt, LearningNode
+from train import d_opt, df_opt, LearningNode2
 from neuron_models import LIF, AdaptiveLIFT, WilsonEuler, WilsonRungeKutta, DurstewitzNeuron, reset_neuron
 import neuron
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set(context='paper', style='white')
 
-def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8), seed=0, dt=0.001, f=Lowpass(0.01), f_smooth=Lowpass(0.1),
-        neuron_type=LIF(), w_ens=None, w_ens2=None, learn=False, learn2=False, half=False, stim_func=lambda t: np.sin(t)):
+def make_normed_flipped(value=1.0, t=1.0, dt=0.001, N=1, f=Lowpass(0.01), seed=0):
+    print('Creating input signal from concatenated, normalized, flipped white noise')
+    stim_length = int(t*N/dt)+1
+    u_list = np.zeros((stim_length, 1))
+    for n in range(N):
+        stim_func = nengo.processes.WhiteSignal(period=t/2, high=1, rms=0.5, seed=seed+n)
+        with nengo.Network() as model:
+            model.t_half = t/2
+            def flip(t, x):
+                return x if t<model.t_half else -1.0*x
+            u_raw = nengo.Node(stim_func)
+            u = nengo.Node(output=flip, size_in=1)   
+            nengo.Connection(u_raw, u, synapse=None)
+            p_u = nengo.Probe(u, synapse=None)
+        with nengo.Simulator(model, progress_bar=False, dt=dt) as sim:
+            sim.run(t, progress_bar=False)
+        u = f.filt(sim.data[p_u], dt=dt)
+        norm = value / np.max(np.abs(u))
+        u_list[n*int(t/dt): (n+1)*int(t/dt)] = sim.data[p_u] * norm
+    stim_func = lambda t: u_list[int(t/dt)]
+    return stim_func
 
-    neuron_type2 = LIF() if half else neuron_type
+def go(d_ens, f_ens, n_pre=100, n_neurons=30, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8), seed=1, dt=0.001, f=Lowpass(0.01), f_smooth=DoubleExp(1e-2, 2e-1),
+        neuron_type=LIF(), w_ens=None, e_ens=None, w_ens2=None, e_ens2=None, L=False, L2=False, stim_func=lambda t: np.sin(t)):
 
     with nengo.Network(seed=seed) as model:
 
@@ -23,9 +43,9 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8),
         u = nengo.Node(stim_func)
 
         # Ensembles
-        pre = nengo.Ensemble(n_neurons, 1, seed=seed)
+        pre = nengo.Ensemble(n_pre, 1, radius=1.5, seed=seed)
         ens = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=neuron_type, seed=seed)
-        ens2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=neuron_type2, seed=seed+1)
+        ens2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=neuron_type, seed=seed+1)
         supv = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=LIF(), seed=seed)
         supv2 = nengo.Ensemble(n_neurons, 1, max_rates=m, intercepts=i, neuron_type=LIF(), seed=seed+1)
         x = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
@@ -43,27 +63,29 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8),
         # Probes
         p_u = nengo.Probe(u, synapse=None)
         p_ens = nengo.Probe(ens.neurons, synapse=None)
+        p_v = nengo.Probe(ens.neurons, 'voltage', synapse=None)
         p_x = nengo.Probe(x, synapse=None)
         p_ens2 = nengo.Probe(ens2.neurons, synapse=None)
+        p_v2 = nengo.Probe(ens2.neurons, 'voltage', synapse=None)
         p_x2 = nengo.Probe(x2, synapse=None)
         p_supv = nengo.Probe(supv.neurons, synapse=None)
         p_supv2 = nengo.Probe(supv2.neurons, synapse=None)
 
         # Bioneurons
-        if learn and isinstance(neuron_type, DurstewitzNeuron):
-            node = LearningNode(n_neurons, pre.n_neurons, 1, conn, k=1e-5)
-            nengo.Connection(pre.neurons, node[0:pre.n_neurons], synapse=f)
-            nengo.Connection(ens.neurons, node[pre.n_neurons:pre.n_neurons+n_neurons], synapse=f_smooth)
-            nengo.Connection(supv.neurons, node[pre.n_neurons+n_neurons: pre.n_neurons+2*n_neurons], synapse=f_smooth)
-        if learn2 and isinstance(neuron_type, DurstewitzNeuron):
-            node2 = LearningNode(n_neurons, n_neurons, 1, conn2, k=1e-5)
+        if L and isinstance(neuron_type, DurstewitzNeuron):
+            node = LearningNode2(n_neurons, n_pre, conn, k=3e-6)
+            nengo.Connection(pre.neurons, node[0:n_pre], synapse=f)
+            nengo.Connection(ens.neurons, node[n_pre:n_pre+n_neurons], synapse=f_smooth)
+            nengo.Connection(supv.neurons, node[n_pre+n_neurons: n_pre+2*n_neurons], synapse=f_smooth)
+        if L2 and isinstance(neuron_type, DurstewitzNeuron):
+            node2 = LearningNode2(n_neurons, n_neurons, conn2, k=3e-6)
             nengo.Connection(ens.neurons, node2[0:n_neurons], synapse=f_ens)
             nengo.Connection(ens2.neurons, node2[n_neurons:2*n_neurons], synapse=f_smooth)
             nengo.Connection(supv2.neurons, node2[2*n_neurons: 3*n_neurons], synapse=f_smooth)
 
     with nengo.Simulator(model, seed=seed, dt=dt) as sim:
         if np.any(w_ens):
-            for pre in range(pre.n_neurons):
+            for pre in range(n_pre):
                 for post in range(n_neurons):
                     conn.weights[pre, post] = w_ens[pre, post]
                     conn.netcons[pre, post].weight[0] = np.abs(w_ens[pre, post])
@@ -74,34 +96,50 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8),
                     conn2.weights[pre, post] = w_ens2[pre, post]
                     conn2.netcons[pre, post].weight[0] = np.abs(w_ens2[pre, post])
                     conn2.netcons[pre, post].syn().e = 0 if w_ens2[pre, post] > 0 else -70
+        if np.any(e_ens):
+            conn.e = e_ens
+        if np.any(e_ens2):
+            conn2.e = e_ens2
         neuron.h.init()
         sim.run(t)
         reset_neuron(sim, model) 
         
+    if L and hasattr(conn, 'weights'):
+        w_ens = conn.weights
+        e_ens = conn.e
+    if L2 and hasattr(conn2, 'weights'):
+        w_ens2 = conn2.weights
+        e_ens2 = conn2.e
+
     return dict(
         times=sim.trange(),
         u=sim.data[p_u],
         ens=sim.data[p_ens],
+        v=sim.data[p_v],
         x=sim.data[p_x],
         ens2=sim.data[p_ens2],
+        v2=sim.data[p_v2],
         x2=sim.data[p_x2],
         supv=sim.data[p_supv],
         supv2=sim.data[p_supv2],
-        enc=sim.data[supv].encoders,
-        enc2=sim.data[supv2].encoders,
-        w_ens=conn.weights if hasattr(conn, 'weights') else None,
-        w_ens2=conn2.weights if hasattr(conn2, 'weights') else None,
+        w_ens=w_ens,
+        e_ens=e_ens,
+        w_ens2=w_ens2,
+        e_ens2=e_ens2,
     )
 
 
-def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_type=LIF(),
-        f=DoubleExp(1e-3, 3e-2), f_out=DoubleExp(1e-3, 1e-1), f_smooth=DoubleExp(1e-2, 2e-1), reg=0, penalty=1.0, 
+def run(n_neurons=30, t=30, t_test=10, n_encodes=10, dt=0.001, n_tests=10, neuron_type=LIF(),
+        f=DoubleExp(1e-3, 3e-2), f_out=DoubleExp(1e-3, 1e-1), reg=0, penalty=1.0, 
         load_w=None, load_df=None):
 
     d_ens = np.zeros((n_neurons, 1))
     f_ens = f
+    f_smooth = DoubleExp(1e-2, 2e-1)
     w_ens = None
+    e_ens = None
     w_ens2 = None
+    e_ens2 = None
     print('\nNeuron Type: %s'%neuron_type)
 
     if isinstance(neuron_type, DurstewitzNeuron):
@@ -109,28 +147,30 @@ def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_t
             w_ens = np.load(load_w)['w_ens']
         else:
             print('Optimizing ens1 encoders')
-            stim_func = nengo.processes.WhiteSignal(period=t_enc, high=1, rms=0.5, seed=0)
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_enc, f=f, dt=0.001, stim_func=stim_func, f_smooth=f_smooth,
-                neuron_type=neuron_type, w_ens=w_ens, w_ens2=w_ens2, learn=True, half=True)
-            w_ens = data['w_ens']
-            fig, ax = plt.subplots()
-            sns.distplot(w_ens.ravel(), ax=ax, bins=np.arange(-0.001, 0.001, 0.0001))
-            ax.set(xlabel='weights', ylabel='frequency')
-            plt.savefig("plots/identity_%s_w_ens.pdf"%neuron_type)
-            np.savez('data/identity_w.npz', w_ens=w_ens)
-            a_ens = f_smooth.filt(data['ens'], dt=0.001)
-            a_supv = f_smooth.filt(data['supv'], dt=0.001)
-            for n in range(n_neurons):
-                fig, (ax, ax2) = plt.subplots(2, 1)
-                ax.plot(data['times'][:20000], a_supv[:,n][:20000], alpha=0.5, label='supv')
-                ax.plot(data['times'][:20000], a_ens[:,n][:20000], alpha=0.5, label='ens')
-                ax.set(ylim=((0, 40)))
-                ax2.plot(data['times'][-20000:], a_supv[:,n][-20000:], alpha=0.5, label='supv')
-                ax2.plot(data['times'][-20000:], a_ens[:,n][-20000:], alpha=0.5, label='ens')
-                ax2.set(xlabel='time', ylabel='Firing Rate', ylim=((0, 40)))
-                plt.legend()
-                plt.savefig('plots/tuning/identity_ens1_activity_%s.pdf'%n)
-                plt.close('all')
+            for nenc in range(n_encodes):
+                print("encoding trial %s"%nenc)
+                stim_func = make_normed_flipped(value=1.2, t=t, dt=dt, f=f, seed=nenc)
+                data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=0.001, stim_func=stim_func,
+                    neuron_type=neuron_type, w_ens=w_ens, e_ens=e_ens, L=True)
+                e_ens = data['e_ens']
+                w_ens = data['w_ens']
+                np.savez('data/identity_w.npz', e_ens=e_ens, w_ens=w_ens)
+                
+                fig, ax = plt.subplots()
+                sns.distplot(np.ravel(w_ens), ax=ax, kde=False)
+                ax.set(xlabel='weights', ylabel='frequency')
+                plt.savefig("plots/tuning/identity_%s_w_ens_nenc_%s.pdf"%(neuron_type, nenc))
+                
+                a_ens = f_smooth.filt(data['ens'], dt=dt)
+                a_supv = f_smooth.filt(data['supv'], dt=dt)
+                for n in range(n_neurons):
+                    fig, ax = plt.subplots(1, 1)
+                    ax.plot(data['times'], a_supv[:,n], alpha=0.5, label='supv')
+                    ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens')
+                    ax.set(ylim=((0, 40)))
+                    plt.legend()
+                    plt.savefig('plots/tuning/identity_ens_nenc_%s_activity_%s.pdf'%(nenc, n))
+                    plt.close('all')
 
     if load_df:
         load = np.load(load_df)
@@ -142,9 +182,9 @@ def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_t
         f_out1 =  DoubleExp(taus_out1[0], taus_out1[1])
     else:
         print('Optimizing ens1 filters and decoders')
-        stim_func = nengo.processes.WhiteSignal(period=t, high=1, rms=0.5, seed=0)
+        stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, f=f)
         data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type,
-            stim_func=stim_func, w_ens=w_ens, w_ens2=w_ens2, half=True)
+            stim_func=stim_func, w_ens=w_ens)
         d_ens, f_ens, taus_ens = df_opt(data['x'], data['ens'], f, dt=dt, reg=reg, penalty=penalty, name='identity_%s'%neuron_type)
         d_out1, f_out1, taus_out1 = df_opt(data['x'], data['ens'], f_out, dt=dt, reg=0, penalty=0, name='identity_%s'%neuron_type)
         np.savez('data/identity_%s_df.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out1=d_out1, taus_out1=taus_out1)
@@ -168,17 +208,7 @@ def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_t
         ax.legend(loc='upper right')
         plt.tight_layout()
         plt.savefig("plots/identity_%s_filters_out1.pdf"%neuron_type)
-
-        fig, ax = plt.subplots()
-        sns.distplot(d_ens.ravel())
-        ax.set(xlabel='decoders', ylabel='frequency')
-        plt.savefig("plots/identity_%s_d_ens.pdf"%neuron_type)
-
-        fig, ax = plt.subplots()
-        sns.distplot(d_out1.ravel())
-        ax.set(xlabel='decoders', ylabel='frequency')
-        plt.savefig("plots/identity_%s_d_out1.pdf"%neuron_type)
-        
+   
         a_ens = f_out1.filt(data['ens'], dt=dt)
         x = f_out.filt(data['x'], dt=dt)
         xhat_ens = np.dot(a_ens, d_out1)
@@ -195,27 +225,29 @@ def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_t
             w_ens2 = np.load(load_w)['w_ens2']
         else:
             print('Optimizing ens2 encoders')
-            stim_func = nengo.processes.WhiteSignal(period=2*t_enc, high=1, rms=0.5, seed=0)
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=2*t_enc, f=f, f_smooth=f_smooth, neuron_type=neuron_type, stim_func=stim_func, w_ens=w_ens, w_ens2=w_ens2, learn2=True)
-            w_ens2 = data['w_ens2']
-            fig, ax = plt.subplots()
-            sns.distplot(w_ens2.ravel(), ax=ax, bins=np.arange(-0.001, 0.001, 0.0001))
-            ax.set(xlabel='weights', ylabel='frequency')
-            plt.savefig("plots/identity_%s_w_ens2.pdf"%neuron_type)
-            np.savez('data/identity_w.npz', w_ens=w_ens, w_ens2=w_ens2)
-            a_ens = f_smooth.filt(data['ens2'], dt=0.001)
-            a_supv = f_smooth.filt(data['supv2'], dt=0.001)
-            for n in range(n_neurons):
-                fig, (ax, ax2) = plt.subplots(2, 1)
-                ax.plot(data['times'][:20000], a_supv[:,n][:20000], alpha=0.5, label='supv2')
-                ax.plot(data['times'][:20000], a_ens[:,n][:20000], alpha=0.5, label='ens2')
-                ax.set(ylim=((0, 40)))
-                ax2.plot(data['times'][-20000:], a_supv[:,n][-20000:], alpha=0.5, label='supv2')
-                ax2.plot(data['times'][-20000:], a_ens[:,n][-20000:], alpha=0.5, label='ens2')
-                ax2.set(xlabel='time', ylabel='Firing Rate', ylim=((0, 40)))
-                plt.legend()
-                plt.savefig('plots/tuning/identity_ens2_activity_%s.pdf'%n)
-                plt.close('all')
+            for nenc in range(n_encodes):
+                print("encoding trial %s"%nenc)
+                stim_func = make_normed_flipped(value=1.2, t=t, dt=dt, f=f, seed=nenc)
+                data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, f_smooth=f_smooth, neuron_type=neuron_type, stim_func=stim_func, w_ens=w_ens, w_ens2=w_ens2, e_ens2=e_ens2, L2=True)
+                w_ens2 = data['w_ens2']
+                e_ens2 = data['e_ens2']
+                
+                fig, ax = plt.subplots()
+                sns.distplot(np.ravel(w_ens2), ax=ax)
+                ax.set(xlabel='weights', ylabel='frequency')
+                plt.savefig("plots/tuning/identity_%s_w_ens2_nenc_%s.pdf"%(neuron_type, nenc))
+                np.savez('data/identity_w.npz', w_ens=w_ens, w_ens2=w_ens2, e_ens=e_ens, e_ens2=e_ens2)
+                
+                a_ens = f_smooth.filt(data['ens2'], dt=dt)
+                a_supv = f_smooth.filt(data['supv2'], dt=dt)
+                for n in range(n_neurons):
+                    fig, ax = plt.subplots(1, 1)
+                    ax.plot(data['times'], a_supv[:,n], alpha=0.5, label='supv2')
+                    ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens2')
+                    ax.set(ylim=((0, 40)))
+                    plt.legend()
+                    plt.savefig('plots/tuning/identity_ens2_nenc_%s_activity_%s.pdf'%(nenc, n))
+                    plt.close('all')
 
     if load_df:
         load = np.load(load_df)
@@ -224,7 +256,7 @@ def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_t
         f_out2 = DoubleExp(taus_out2[0], taus_out2[1])
     else:
         print('Optimizing ens2 filters and decoders')
-        stim_func = nengo.processes.WhiteSignal(period=t, high=1, rms=0.5, seed=0)
+        stim_func = make_normed_flipped(value=1.0, t=t, dt=dt, f=f)
         data = go(d_ens, f_ens, n_neurons=n_neurons, t=t, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, w_ens=w_ens, w_ens2=w_ens2)
         d_out2, f_out2, taus_out2  = df_opt(data['x2'], data['ens2'], f_out, dt=dt, reg=0, penalty=0, name='identity_%s'%neuron_type)
         np.savez('data/identity_%s_df.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_out1=d_out1, taus_out1=taus_out1, d_out2=d_out2, taus_out2=taus_out2)
@@ -240,7 +272,7 @@ def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_t
         plt.savefig("plots/identity_%s_filters_out2.pdf"%neuron_type)
 
         fig, ax = plt.subplots()
-        sns.distplot(d_out2.ravel())
+        sns.distplot(np.ravel(d_out2))
         ax.set(xlabel='decoders', ylabel='frequency')
         plt.savefig("plots/identity_%s_d_out2.pdf"%neuron_type)
 
@@ -260,7 +292,7 @@ def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_t
     nrmses_ens2 = np.zeros((n_tests))
     for test in range(n_tests):
         print('test %s' %test)
-        stim_func = nengo.processes.WhiteSignal(period=t_test, high=1, rms=0.5, seed=100+test)
+        stim_func = make_normed_flipped(value=1.0, t=t_test, dt=dt, f=f, seed=100+test)
         data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_test, f=f, dt=dt, neuron_type=neuron_type, stim_func=stim_func, w_ens=w_ens, w_ens2=w_ens2)
 
         a_ens = f_out1.filt(data['ens'], dt=dt)
@@ -309,7 +341,7 @@ def run(n_neurons=30, t=30, t_test=30, t_enc=200, dt=0.001, n_tests=10, neuron_t
 # nrmses_lif = run(neuron_type=LIF())
 # nrmses_alif = run(neuron_type=AdaptiveLIFT())
 # nrmses_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
-nrmses_durstewitz = run(neuron_type=DurstewitzNeuron(DA=1.0))
+nrmses_durstewitz = run(n_encodes=20, neuron_type=DurstewitzNeuron())
 
 # nrmses_lif = np.load("data/identity_LIF()_results.npz")['nrmses_ens2']
 # nrmses_alif = np.load("data/identity_AdaptiveLIFT()_results.npz")['nrmses_ens2']

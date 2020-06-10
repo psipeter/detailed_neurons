@@ -3,6 +3,7 @@ import nengo
 from nengo.params import Default
 from nengo.dists import Uniform
 from nengo.solvers import NoSolver
+from nengo.utils.numpy import rmse
 from nengolib import Lowpass, DoubleExp
 from nengolib.signal import s, z, nrmse, LinearSystem
 from train import d_opt, df_opt, LearningNode2
@@ -34,7 +35,7 @@ def make_normed_flipped(value=1.0, t=1.0, dt=0.001, N=1, f=Lowpass(0.01), seed=0
     stim_func = lambda t: u_list[int(t/dt)]
     return stim_func
 
-def go(d_ens, f_ens, n_pre=100, n_neurons=30, t=10, m=Uniform(20, 40), i=Uniform(-1, 0.8), seed=1, dt=0.001, f=Lowpass(0.01), f_smooth=DoubleExp(1e-2, 2e-1),
+def go(d_ens, f_ens, n_pre=100, n_neurons=30, t=10, m=Uniform(30, 40), i=Uniform(-1, 0.6), seed=1, dt=0.001, f=Lowpass(0.01), f_smooth=DoubleExp(1e-2, 2e-1),
         neuron_type=LIF(), w_ens=None, e_ens=None, w_ens2=None, e_ens2=None, L=False, L2=False, stim_func=lambda t: np.sin(t)):
 
     with nengo.Network(seed=seed) as model:
@@ -129,7 +130,7 @@ def go(d_ens, f_ens, n_pre=100, n_neurons=30, t=10, m=Uniform(20, 40), i=Uniform
     )
 
 
-def run(n_neurons=30, t=30, t_test=10, n_encodes=10, dt=0.001, n_tests=10, neuron_type=LIF(),
+def run(n_neurons=30, t=30, t_test=10, n_encodes=20, dt=0.001, n_tests=10, neuron_type=LIF(),
         f=DoubleExp(1e-3, 3e-2), f_out=DoubleExp(1e-3, 1e-1), reg=0, penalty=1.0, 
         load_w=None, load_df=None):
 
@@ -212,10 +213,10 @@ def run(n_neurons=30, t=30, t_test=10, n_encodes=10, dt=0.001, n_tests=10, neuro
         a_ens = f_out1.filt(data['ens'], dt=dt)
         x = f_out.filt(data['x'], dt=dt)
         xhat_ens = np.dot(a_ens, d_out1)
-        nrmse_ens = nrmse(xhat_ens, target=x)
+        rmse_ens = rmse(xhat_ens, x)
         fig, ax = plt.subplots()
         ax.plot(data['times'], x, linestyle="--", label='x')
-        ax.plot(data['times'], xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
+        ax.plot(data['times'], xhat_ens, label='ens, rmse=%.3f' %rmse_ens)
         ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="train ens1")
         plt.legend(loc='upper right')
         plt.savefig("plots/identity_%s_ens1_train.pdf"%neuron_type)
@@ -279,17 +280,17 @@ def run(n_neurons=30, t=30, t_test=10, n_encodes=10, dt=0.001, n_tests=10, neuro
         a_ens2 = f_out2.filt(data['ens2'], dt=dt)
         x2 = f_out.filt(data['x2'], dt=dt)
         xhat_ens2 = np.dot(a_ens2, d_out2)
-        nrmse_ens2 = nrmse(xhat_ens2, target=x2)
+        rmse_ens2 = rmse(xhat_ens2, x2)
 
         fig, ax = plt.subplots()
         ax.plot(data['times'], x2, linestyle="--", label='x')
-        ax.plot(data['times'], xhat_ens2, label='ens2, nrmse=%.3f' %nrmse_ens2)
+        ax.plot(data['times'], xhat_ens2, label='ens2, rmse=%.3f' %rmse_ens2)
         ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="train ens2")
         plt.legend(loc='upper right')
         plt.savefig("plots/identity_%s_ens2_train.pdf"%neuron_type)
 
-    nrmses_ens = np.zeros((n_tests))
-    nrmses_ens2 = np.zeros((n_tests))
+    rmses_ens = np.zeros((n_tests))
+    rmses_ens2 = np.zeros((n_tests))
     for test in range(n_tests):
         print('test %s' %test)
         stim_func = make_normed_flipped(value=1.0, t=t_test, dt=dt, f=f, seed=100+test)
@@ -298,60 +299,60 @@ def run(n_neurons=30, t=30, t_test=10, n_encodes=10, dt=0.001, n_tests=10, neuro
         a_ens = f_out1.filt(data['ens'], dt=dt)
         x = f_out.filt(data['x'], dt=dt)
         xhat_ens = np.dot(a_ens, d_ens)
-        nrmse_ens = nrmse(xhat_ens, target=x)
+        rmse_ens = rmse(xhat_ens, x)
         a_ens2 = f_out2.filt(data['ens2'], dt=dt)
         x2 = f_out.filt(data['x2'], dt=dt)
         xhat_ens2 = np.dot(a_ens2, d_out2)
-        nrmse_ens2 = nrmse(xhat_ens2, target=x2)
-        nrmses_ens[test] = nrmse_ens
-        nrmses_ens2[test] = nrmse_ens2        
+        rmse_ens2 = rmse(xhat_ens2, x2)
+        rmses_ens[test] = rmse_ens
+        rmses_ens2[test] = rmse_ens2        
     
         fig, ax = plt.subplots()
         ax.plot(data['times'], x, linestyle="--", label='x')
-        ax.plot(data['times'], xhat_ens, label='ens, nrmse=%.3f' %nrmse_ens)
+        ax.plot(data['times'], xhat_ens, label='ens, rmse=%.3f' %rmse_ens)
         ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="test ens1")
         plt.legend(loc='upper right')
         plt.savefig("plots/identity_%s_ens1_test_%s.pdf"%(neuron_type, test))
 
         fig, ax = plt.subplots()
         ax.plot(data['times'], x2, linestyle="--", label='x')
-        ax.plot(data['times'], xhat_ens2, label='ens2, nrmse=%.3f' %nrmse_ens2)
+        ax.plot(data['times'], xhat_ens2, label='ens2, rmse=%.3f' %rmse_ens2)
         ax.set(xlabel='time (s)', ylabel=r'$\mathbf{x}$', title="test ens2")
         plt.legend(loc='upper right')
         plt.savefig("plots/identity_%s_ens2_test_%s.pdf"%(neuron_type, test))
         plt.close('all')
 
-    mean_ens = np.mean(nrmses_ens)
-    mean_ens2 = np.mean(nrmses_ens2)
-    CI_ens = sns.utils.ci(nrmses_ens)
-    CI_ens2 = sns.utils.ci(nrmses_ens2)
+    mean_ens = np.mean(rmses_ens)
+    mean_ens2 = np.mean(rmses_ens2)
+    CI_ens = sns.utils.ci(rmses_ens)
+    CI_ens2 = sns.utils.ci(rmses_ens2)
     
     fig, ax = plt.subplots()
-    sns.barplot(data=nrmses_ens2)
-    ax.set(ylabel='NRMSE', title="mean=%.3f, CI=%.3f-%.3f"%(mean_ens2, CI_ens2[0], CI_ens2[1]))
+    sns.barplot(data=rmses_ens2)
+    ax.set(ylabel='RMSE', title="mean=%.3f, CI=%.3f-%.3f"%(mean_ens2, CI_ens2[0], CI_ens2[1]))
     plt.xticks()
-    plt.savefig("plots/identity_%s_nrmse.pdf"%neuron_type)
+    plt.savefig("plots/identity_%s_rmse.pdf"%neuron_type)
 
-    print('nrmses: ', nrmses_ens, nrmses_ens2)
+    print('rmses: ', rmses_ens, rmses_ens2)
     print('means: ', mean_ens, mean_ens2)
     print('confidence intervals: ', CI_ens, CI_ens2)
-    np.savez('data/identity_%s_results.npz'%neuron_type, nrmses_ens=nrmses_ens, nrmses_ens2=nrmses_ens2)
-    return nrmses_ens2
+    np.savez('data/identity_%s_results.npz'%neuron_type, rmses_ens=rmses_ens, rmses_ens2=rmses_ens2)
+    return rmses_ens2
 
-# nrmses_lif = run(neuron_type=LIF())
-# nrmses_alif = run(neuron_type=AdaptiveLIFT())
-# nrmses_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
-nrmses_durstewitz = run(n_encodes=20, neuron_type=DurstewitzNeuron())
+# rmses_lif = run(neuron_type=LIF())
+# rmses_alif = run(neuron_type=AdaptiveLIFT())
+# rmses_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
+# rmses_durstewitz = run(neuron_type=DurstewitzNeuron())
 
-# nrmses_lif = np.load("data/identity_LIF()_results.npz")['nrmses_ens2']
-# nrmses_alif = np.load("data/identity_AdaptiveLIFT()_results.npz")['nrmses_ens2']
-# nrmses_wilson = np.load("data/identity_WilsonEuler()_results.npz")['nrmses_ens2']
-# nrmses_durstewitz = np.load("data/identity_DurstewitzNeuron()_results.npz")['nrmses_ens2']
+rmses_lif = np.load("data/identity_LIF()_results.npz")['rmses_ens2']
+rmses_alif = np.load("data/identity_AdaptiveLIFT()_results.npz")['rmses_ens2']
+rmses_wilson = np.load("data/identity_WilsonEuler()_results.npz")['rmses_ens2']
+rmses_durstewitz = np.load("data/identity_DurstewitzNeuron()_results.npz")['rmses_ens2']
 
-# nrmses = np.vstack((nrmses_lif, nrmses_alif, nrmses_wilson, nrmses_durstewitz))
-# nt_names =  ['LIF', 'ALIF', 'Wilson', 'Durstewitz']
-# fig, ax = plt.subplots()
-# sns.barplot(data=nrmses.T)
-# ax.set(ylabel='NRMSE')
-# plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
-# plt.savefig("figures/identity_all_nrmses.pdf")
+rmses = np.vstack((rmses_lif, rmses_alif, rmses_wilson, rmses_durstewitz))
+nt_names =  ['LIF', 'ALIF', 'Wilson', 'Durstewitz']
+fig, ax = plt.subplots()
+sns.barplot(data=rmses.T)
+ax.set(ylabel='RMSE')
+plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
+plt.savefig("figures/identity_all_rmses.pdf")

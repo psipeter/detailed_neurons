@@ -18,7 +18,7 @@ import seaborn as sns
 sns.set(context='paper', style='white')
 
 
-def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(30, 40), i=Uniform(-1, 0.6), seed=0, dt=0.001, neuron_type=nengo.LIF(), f=Lowpass(0.1), f_smooth=Lowpass(0.1), freq=1, w_ff=None, w_fb=None, e_ff=None, e_fb=None, L_ff=False, L_fb=False, L_fd=False):
+def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(30, 40), i=Uniform(-1, 0.6), seed=0, dt=0.001, neuron_type=nengo.LIF(), f=DoubleExp(1e-2, 2e-1), f_smooth=DoubleExp(1e-2, 2e-1), freq=1, w_ff=None, w_fb=None, e_ff=None, e_fb=None, L_ff=False, L_fb=False, L_fd=False, supervised=False):
 
     w = 2*np.pi*freq
     A = [[0, -w], [w, 0]]
@@ -47,26 +47,27 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(30, 40), i=Uniform(-1, 0.6),
             nengo.Connection(u, node[-2:], synapse=f)
             p_supv = nengo.Probe(supv.neurons, synapse=None)
 
-        if L_fb:
+        if L_fb or supervised:
             supv = nengo.Ensemble(n_neurons, 2, max_rates=m, intercepts=i, neuron_type=neuron_type, seed=seed, radius=2)
-            supv2 = nengo.Ensemble(n_neurons, 2, max_rates=m, intercepts=i, neuron_type=neuron_type, seed=seed, radius=2)
-            pre2 = nengo.Ensemble(300, 2, neuron_type=SpikingRectifiedLinear(), seed=seed, radius=2)
-            
-            nengo.Connection(u, pre2, synapse=f, seed=seed)
+#             supv2 = nengo.Ensemble(n_neurons, 2, max_rates=m, intercepts=i, neuron_type=neuron_type, seed=seed, radius=2)
+#             pre2 = nengo.Ensemble(300, 2, neuron_type=SpikingRectifiedLinear(), seed=seed, radius=2)
+#             nengo.Connection(u, pre2, synapse=f, seed=seed)
             pre_supv = nengo.Connection(pre, supv, synapse=f, seed=seed)
-            pre2_supv2 = nengo.Connection(pre2, supv2, synapse=f, seed=seed)
+#             pre2_supv2 = nengo.Connection(pre2, supv2, synapse=f, seed=seed)
             supv_ens = nengo.Connection(supv, ens, synapse=f_ens, seed=seed, solver=NoSolver(d_ens))
+            p_supv = nengo.Probe(supv.neurons, synapse=None)
+#             p_supv2 = nengo.Probe(supv2.neurons, synapse=None)
+
+        if L_fb:
             node = LearningNode2(n_neurons, n_neurons, supv_ens, k=3e-6)
             nengo.Connection(supv.neurons, node[0:n_neurons], synapse=f_ens)
             nengo.Connection(ens.neurons, node[n_neurons:2*n_neurons], synapse=f_smooth)
-            nengo.Connection(supv2.neurons, node[2*n_neurons: 3*n_neurons], synapse=f_smooth)
-#             nengo.Connection(supv.neurons, node[2*n_neurons: 3*n_neurons], synapse=f_smooth)
+#             nengo.Connection(supv2.neurons, node[2*n_neurons: 3*n_neurons], synapse=f_smooth)
+            nengo.Connection(supv.neurons, node[2*n_neurons: 3*n_neurons], synapse=f_smooth)
             nengo.Connection(u, node[-2:], synapse=f)
-            p_supv = nengo.Probe(supv.neurons, synapse=None)
-            p_supv2 = nengo.Probe(supv2.neurons, synapse=None)
 
-        if not L_ff and not L_fb and not L_fd:
-            off = nengo.Node(lambda t: (t>0.1))
+        if not L_ff and not L_fb and not L_fd and not supervised:
+            off = nengo.Node(lambda t: (t>1.0))
             nengo.Connection(off, pre.neurons, synapse=None, transform=-1e3*np.ones((pre.n_neurons, 1)))
             ens_ens = nengo.Connection(ens, ens, synapse=f_ens, seed=seed, solver=NoSolver(d_ens))
 
@@ -78,13 +79,13 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(30, 40), i=Uniform(-1, 0.6),
         if np.any(w_ff):
             for pre in range(pre.n_neurons):
                 for post in range(n_neurons):
-                    if L_fb:
+                    if L_fb or supervised:
                         pre_supv.weights[pre, post] = w_ff[pre, post]
                         pre_supv.netcons[pre, post].weight[0] = np.abs(w_ff[pre, post])
                         pre_supv.netcons[pre, post].syn().e = 0 if w_ff[pre, post] > 0 else -70
-                        pre2_supv2.weights[pre, post] = w_ff[pre, post]
-                        pre2_supv2.netcons[pre, post].weight[0] = np.abs(w_ff[pre, post])
-                        pre2_supv2.netcons[pre, post].syn().e = 0 if w_ff[pre, post] > 0 else -70
+#                         pre2_supv2.weights[pre, post] = w_ff[pre, post]
+#                         pre2_supv2.netcons[pre, post].weight[0] = np.abs(w_ff[pre, post])
+#                         pre2_supv2.netcons[pre, post].syn().e = 0 if w_ff[pre, post] > 0 else -70
                     else:
                         pre_ens.weights[pre, post] = w_ff[pre, post]
                         pre_ens.netcons[pre, post].weight[0] = np.abs(w_ff[pre, post])
@@ -94,7 +95,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(30, 40), i=Uniform(-1, 0.6),
         if np.any(w_fb):
             for pre in range(n_neurons):
                 for post in range(n_neurons):
-                    if L_fb:
+                    if L_fb or supervised:
                         supv_ens.weights[pre, post] = w_fb[pre, post]
                         supv_ens.netcons[pre, post].weight[0] = np.abs(w_fb[pre, post])
                         supv_ens.netcons[pre, post].syn().e = 0 if w_fb[pre, post] > 0 else -70
@@ -120,8 +121,8 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(30, 40), i=Uniform(-1, 0.6),
         times=sim.trange(),
         u=sim.data[p_u],
         ens=sim.data[p_ens],
-        supv=sim.data[p_supv] if L_ff or L_fb else None,
-        supv2=sim.data[p_supv2] if L_fb else None,
+        supv=sim.data[p_supv] if L_ff or L_fb or supervised else None,
+#         supv2=sim.data[p_supv2] if L_fb or supervised else None,
         w_ff=w_ff,
         w_fb=w_fb,
         e_ff=e_ff,
@@ -129,7 +130,7 @@ def go(d_ens, f_ens, n_neurons=100, t=10, m=Uniform(30, 40), i=Uniform(-1, 0.6),
     )
 
 
-def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2, 2e-1), penalty=0, reg=1e-1, freq=1, tt=5.0, tt_test=5.0, neuron_type=LIF(), load_fd=False, load_w=None, supervised=False):
+def run(n_neurons=100, t=20, t_test=10, t_enc=30, dt=0.001, f=DoubleExp(1e-2, 2e-1), penalty=0, reg=1e-1, freq=1, tt=5.0, tt_test=5.0, neuron_type=LIF(), load_fd=False, load_w=None, supervised=False):
 
     d_ens = np.zeros((n_neurons, 2))
     f_ens = f
@@ -137,7 +138,7 @@ def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2,
     w_fb = None
     e_ff = None
     e_fb = None
-    f_smooth=DoubleExp(1e-2, 2e-1)
+    f_smooth = DoubleExp(1e-2, 2e-1)
     print('Neuron Type: %s'%neuron_type)
 
     if isinstance(neuron_type, DurstewitzNeuron):
@@ -145,8 +146,8 @@ def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2,
             w_ff = np.load(load_w)['w_ff']
             e_ff = np.load(load_w)['e_ff']
         else:
-            print('optimizing encoders from pre into DurstewitzNeuron ens')
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_encode+tt, f=f, dt=dt, neuron_type=neuron_type, w_ff=w_ff, e_ff=e_ff, L_ff=True)
+            print('optimizing encoders from pre to ens')
+            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_enc+tt, f=f, dt=dt, neuron_type=neuron_type, w_ff=w_ff, e_ff=e_ff, L_ff=True)
             w_ff = data['w_ff']
             e_ff = data['e_ff']
             np.savez('data/oscillate_w.npz', w_ff=w_ff, e_ff=e_ff)
@@ -164,7 +165,7 @@ def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2,
                 ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens')
                 ax.set(ylim=((0, 40)))
                 plt.legend()
-                plt.savefig('plots/tuning/oscillate_pre_ens_activity_%s.pdf'%(neuron_type))
+                plt.savefig('plots/tuning/oscillate_pre_ens_activity_%s.pdf'%(n))
                 plt.close('all')
 
     if load_fd:
@@ -205,8 +206,8 @@ def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2,
             w_fb = np.load(load_w)['w_fb']
             e_fb = np.load(load_w)['e_fb']
         else:
-            print('optimizing encoders into DurstewitzNeuron ens')
-            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_encode+tt, f=f, dt=dt, neuron_type=neuron_type, w_ff=w_ff, w_fb=w_fb, e_fb=e_fb, L_fb=True)
+            print('optimizing encoders from supv to ens')
+            data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_enc+tt, f=f, dt=dt, neuron_type=neuron_type, w_ff=w_ff, w_fb=w_fb, e_fb=e_fb, L_fb=True)
             w_fb = data['w_fb']
             e_fb = data['e_fb']
             np.savez('data/oscillate_w.npz', w_ff=w_ff, e_ff=e_ff, w_fb=w_fb, e_fb=e_fb)
@@ -218,30 +219,30 @@ def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2,
             
             a_ens = f_smooth.filt(data['ens'], dt=dt)
             a_supv = f_smooth.filt(data['supv'], dt=dt)
-            a_supv2 = f_smooth.filt(data['supv2'], dt=dt)
+#             a_supv2 = f_smooth.filt(data['supv2'], dt=dt)
             for n in range(n_neurons):
                 fig, ax = plt.subplots(1, 1)
                 ax.plot(data['times'], a_supv[:,n], alpha=0.5, label='supv')
-                ax.plot(data['times'], a_supv2[:,n], alpha=0.5, label='supv2')
+#                 ax.plot(data['times'], a_supv2[:,n], alpha=0.5, label='supv2')
                 ax.plot(data['times'], a_ens[:,n], alpha=0.5, label='ens')
                 ax.set(ylim=((0, 40)))
                 plt.legend()
-                plt.savefig('plots/tuning/oscillate_supv_ens_activity_%s.pdf'%(neuron_type))
+                plt.savefig('plots/tuning/oscillate_supv_ens_activity_%s.pdf'%(n))
                 plt.close('all')
             
     print("Testing")
     if supervised:
-        data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_test+tt_test, f=f, dt=dt, neuron_type=neuron_type, w_ff=w_ff, w_fb=w_fb, e_fb=e_fb, L_fb=True)
+        data = go(d_ens, f_ens, n_neurons=n_neurons, t=t_test+tt_test, f=f, dt=dt, neuron_type=neuron_type, w_ff=w_ff, w_fb=w_fb, supervised=True)
 
         a_ens = f_ens.filt(data['ens'], dt=dt)
         a_supv = f_ens.filt(data['supv'], dt=dt)
-        a_supv2 = f_ens.filt(data['supv2'], dt=dt)
+#         a_supv2 = f_ens.filt(data['supv2'], dt=dt)
         xhat_ens_0 = np.dot(a_ens, d_ens)[:,0]
         xhat_ens_1 = np.dot(a_ens, d_ens)[:,1]
         xhat_supv_0 = np.dot(a_supv, d_ens)[:,0]
         xhat_supv_1 = np.dot(a_supv, d_ens)[:,1]
-        xhat_supv2_0 = np.dot(a_supv2, d_ens)[:,0]
-        xhat_supv2_1 = np.dot(a_supv2, d_ens)[:,1]
+#         xhat_supv2_0 = np.dot(a_supv2, d_ens)[:,0]
+#         xhat_supv2_1 = np.dot(a_supv2, d_ens)[:,1]
         x_0 = f.filt(data['u'], dt=dt)[:,0]
         x_1 = f.filt(data['u'], dt=dt)[:,1]
         x2_0 = f.filt(x_0, dt=dt)
@@ -253,7 +254,7 @@ def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2,
         ax.plot(times, x2_0, linestyle="--", label='x2_0')
         ax.plot(times, xhat_supv_0, label='supv')
         ax.plot(times, xhat_ens_0, label='ens')
-        ax.plot(times, xhat_supv2_0, label='supv2')
+#         ax.plot(times, xhat_supv2_0, label='supv2')
         ax.set(xlim=((0, t_test)), ylim=((-1, 1)), xlabel='time (s)', ylabel=r'$\mathbf{x}$')
         plt.legend(loc='upper right')
         plt.savefig("plots/oscillate_%s_supervised_0.pdf"%neuron_type)
@@ -263,7 +264,7 @@ def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2,
         ax.plot(times, x2_1, linestyle="--", label='x2_1')
         ax.plot(times, xhat_supv_1, label='supv')
         ax.plot(times, xhat_ens_1, label='ens')
-        ax.plot(times, xhat_supv2_1, label='supv2')
+#         ax.plot(times, xhat_supv2_1, label='supv2')
         ax.set(xlim=((0, t_test)), ylim=((-1, 1)), xlabel='time (s)', ylabel=r'$\mathbf{x}$')
         plt.legend(loc='upper right')
         plt.savefig("plots/oscillate_%s_supervised_1.pdf"%neuron_type)
@@ -346,12 +347,12 @@ def run(n_neurons=100, t=10, t_test=10, t_encode=10, dt=0.001, f=DoubleExp(1e-2,
         return mean
 
 
-scaled_rmse_lif = run(neuron_type=LIF())
-scaled_rmse_alif = run(neuron_type=AdaptiveLIFT())
-scaled_rmse_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
+# scaled_rmse_lif = run(neuron_type=LIF())
+# scaled_rmse_alif = run(neuron_type=AdaptiveLIFT())
+# scaled_rmse_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
 #     load_fd="data/oscillate_WilsonEuler()_fd.npz")
-# scaled_rmse_durstewitz = run(neuron_type=DurstewitzNeuron(0.0), n_neurons=100, t_test=2, t_encode=30,
-#      load_w="data/oscillate_w.npz", load_fd="data/oscillate_DurstewitzNeuron()_fd.npz", supervised=False)
+scaled_rmse_durstewitz = run(neuron_type=DurstewitzNeuron(0.0), n_neurons=30)
+#      load_w="data/oscillate_w.npz", load_fd="data/oscillate_DurstewitzNeuron()_fd.npz", supervised=True)
 
 # errors = np.vstack((freq_error_lif, freq_error_alif, freq_error_wilson, freq_error_durstewitz))
 # nt_names =  ['LIF', 'ALIF', 'Wilson', 'Durstewitz']

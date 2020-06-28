@@ -1,8 +1,9 @@
 import numpy as np
-from scipy.signal import argrelextrema
+from scipy.signal import find_peaks
 from scipy.linalg import norm
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import curve_fit
+from scipy.stats import entropy
 import nengo
 from nengo import SpikingRectifiedLinear
 from nengo.params import Default
@@ -38,9 +39,9 @@ class DownsampleNode(object):
         self.count += 1
         return self.output
     
-def go(d_ens, f_ens, n_neurons=5000, t=50, learn=False, neuron_type=LIF(),
-       m=Uniform(20, 40), i=Uniform(-1, 0.8), r=40, IC=[0,0,0],
-       seed=0, dt=0.001, dt_sample=0.001, f=Lowpass(0.1)):
+def go(d_ens, f_ens, n_neurons=3000, t=100, L=False, neuron_type=LIF(),
+       m=Uniform(30, 40), i=Uniform(-1, 1), r=40, IC=np.array([1,1,1]),
+       seed=0, dt=0.001, dt_sample=0.001, f=DoubleExp(1e-3, 1e-1)):
 
     with nengo.Network(seed=seed) as model:
         # Ensembles
@@ -52,8 +53,8 @@ def go(d_ens, f_ens, n_neurons=5000, t=50, learn=False, neuron_type=LIF(),
         # Connections
         nengo.Connection(u, x, synapse=None)
         nengo.Connection(x, x, function=feedback, synapse=~s)
-        if learn:
-            supv = nengo.Ensemble(n_neurons, 3, neuron_type=SpikingRectifiedLinear(), max_rates=m, intercepts=i, radius=r, seed=seed)
+        if L:
+            supv = nengo.Ensemble(n_neurons, 3, neuron_type=SpikingRectifiedLinear(), radius=r, seed=seed)
             nengo.Connection(x, supv, synapse=None)
             nengo.Connection(supv, ens, synapse=f, seed=seed)
         else:
@@ -84,8 +85,7 @@ def feedback(x):
 def mountain(x, a, b, c):
     return (a*x + b)*(x<=c) + (-a*x + 2*a*c + b)*(x>c)
 
-def run(n_neurons=5000, neuron_type=LIF(), t_train=50, t=150, f=DoubleExp(1e-3, 1e-1), dt=0.001, dt_sample=0.001, seed=0,
-        m=Uniform(20, 40), i=Uniform(-1, 0.8), r=40, n_tests=10, smooth=100, reg=1e-1, penalty=0, df_evals=20, load_fd=False):
+def run(n_neurons=10000, neuron_type=LIF(), t_train=200, t=200, f=DoubleExp(1e-3, 1e-1), dt=0.001, dt_sample=0.003, tt=1.0, seed=0, smooth=30, reg=1e-1, penalty=0, df_evals=20, load_fd=False):
 
     d_ens = np.zeros((n_neurons, 3))
     f_ens = f
@@ -95,17 +95,16 @@ def run(n_neurons=5000, neuron_type=LIF(), t_train=50, t=150, f=DoubleExp(1e-3, 
         d_ens = load['d_ens']
         taus_ens = load['taus_ens']
         f_ens = DoubleExp(taus_ens[0], taus_ens[1])
+        d_ens_gauss = load['d_ens_gauss']
     else:
         print('Optimizing ens filters and decoders')
-        rng = np.random.RandomState(seed=0)
-        IC = rng.uniform(-1, 1, size=3)
-        IC /= norm(IC, 1)
-        data = go(d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, IC=IC, r=r,
-            learn=True, t=t_train, f=f, m=m, i=i, dt=dt, dt_sample=dt_sample, seed=seed)
+        data = go(d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, L=True, t=t_train, f=f, dt=dt, dt_sample=dt_sample, seed=seed)
 
-        d_ens, f_ens, taus_ens = df_opt(data['x'], data['ens'], f, df_evals=df_evals, reg=reg, penalty=penalty, dt=dt_sample,
-            name='lorenz_%s'%neuron_type)
-        np.savez('data/lorenz_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens)
+        d_ens, f_ens, taus_ens = df_opt(data['x'], data['ens'], f, df_evals=df_evals, reg=reg, penalty=penalty, dt=dt_sample, dt_sample=dt_sample, name='lorenz_%s'%neuron_type)
+        all_targets_gauss = gaussian_filter1d(data['x'], sigma=smooth, axis=0)
+        all_spikes_gauss = gaussian_filter1d(data['ens'], sigma=smooth, axis=0)
+        d_ens_gauss = nengo.solvers.LstsqL2(reg=reg)(all_spikes_gauss, all_targets_gauss)[0]
+        np.savez('data/lorenz_%s_fd.npz'%neuron_type, d_ens=d_ens, taus_ens=taus_ens, d_ens_gauss=d_ens_gauss)
     
         f_times = np.arange(0, 1, 0.0001)
         fig, ax = plt.subplots()
@@ -118,15 +117,20 @@ def run(n_neurons=5000, neuron_type=LIF(), t_train=50, t=150, f=DoubleExp(1e-3, 
         plt.tight_layout()
         plt.savefig("plots/lorenz_%s_filters_ens.pdf"%neuron_type)
 
-        x = f.filt(data['x'], dt=dt_sample)
+        tar = f.filt(data['x'], dt=dt_sample)
         a_ens = f_ens.filt(data['ens'], dt=dt_sample)
-        xhat_ens = np.dot(a_ens, d_ens)
+        ens = np.dot(a_ens, d_ens)
+        z_tar_peaks, _ = find_peaks(tar[:,2], height=0)  # gives time indices of z-component-peaks
+        z_ens_peaks, _ = find_peaks(ens[:,2], height=0)
+
         fig = plt.figure()    
-        ax = fig.add_subplot(111, projection='3d')
-        ax.plot(*xhat_ens.T, linewidth=0.25)
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
+        ax = fig.add_subplot(121, projection='3d')
+        ax2 = fig.add_subplot(122, projection='3d')
+        ax.plot(*tar.T, linewidth=0.25)
+#             ax.scatter(*tar[z_tar_peaks].T, color='r', s=1)
+        ax2.plot(*ens.T, linewidth=0.25)
+#             ax2.scatter(*ens[z_ens_peaks].T, color='r', s=1, marker='v')
+        ax.set(xlabel="x", ylabel="y", zlabel="z", xlim=((-20, 20)), ylim=((-10, 30)), zlim=((0, 40)))
         ax.xaxis.pane.fill = False
         ax.yaxis.pane.fill = False
         ax.zaxis.pane.fill = False
@@ -134,140 +138,158 @@ def run(n_neurons=5000, neuron_type=LIF(), t_train=50, t=150, f=DoubleExp(1e-3, 
         ax.yaxis.pane.set_edgecolor('w')
         ax.zaxis.pane.set_edgecolor('w')
         ax.grid(False)
+        ax2.set(xlabel="x", ylabel="y", zlabel="z", xlim=((-20, 20)), ylim=((-10, 30)), zlim=((0, 40)))
+        ax2.xaxis.pane.fill = False
+        ax2.yaxis.pane.fill = False
+        ax2.zaxis.pane.fill = False
+        ax2.xaxis.pane.set_edgecolor('w')
+        ax2.yaxis.pane.set_edgecolor('w')
+        ax2.zaxis.pane.set_edgecolor('w')
+        ax2.grid(False)
         plt.savefig("plots/lorenz_%s_train_3D.pdf"%neuron_type)
 
-        # fig = plt.figure()    
-        # ax = fig.add_subplot(111, projection='3d')
-        # ax.plot(*x.T, linewidth=0.25)
-        # ax.set_xlabel("x")
-        # ax.set_ylabel("y")
-        # ax.set_zlabel("z")
-        # ax.xaxis.pane.fill = False
-        # ax.yaxis.pane.fill = False
-        # ax.zaxis.pane.fill = False
-        # ax.xaxis.pane.set_edgecolor('w')
-        # ax.yaxis.pane.set_edgecolor('w')
-        # ax.zaxis.pane.set_edgecolor('w')
-        # ax.grid(False)
-        # plt.savefig("plots/lorenz_%s_train_3D_target.pdf"%neuron_type)
-
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
-        ax1.plot(x[:,0], x[:,1], linestyle="--", linewidth=0.25)
-        ax2.plot(x[:,1], x[:,2], linestyle="--", linewidth=0.25)
-        ax3.plot(x[:,0], x[:,2], linestyle="--", linewidth=0.25)
-        ax1.plot(xhat_ens[:,0], xhat_ens[:,1], linewidth=0.25)
-        ax2.plot(xhat_ens[:,1], xhat_ens[:,2], linewidth=0.25)
-        ax3.plot(xhat_ens[:,0], xhat_ens[:,2], linewidth=0.25)
+        ax1.plot(tar[:,0], tar[:,1], linestyle="--", linewidth=0.25)
+        ax2.plot(tar[:,1], tar[:,2], linestyle="--", linewidth=0.25)
+        ax3.plot(tar[:,0], tar[:,2], linestyle="--", linewidth=0.25)
+#             ax2.scatter(tar[z_tar_peaks, 1], tar[z_tar_peaks, 2], s=3, color='r')
+#             ax3.scatter(tar[z_tar_peaks, 0], tar[z_tar_peaks, 2], s=3, color='g')
+        ax1.plot(ens[:,0], ens[:,1], linewidth=0.25)
+        ax2.plot(ens[:,1], ens[:,2], linewidth=0.25)
+        ax3.plot(ens[:,0], ens[:,2], linewidth=0.25)
+#             ax2.scatter(ens[z_ens_peaks, 1], ens[z_ens_peaks, 2], s=3, color='r', marker='v')
+#             ax3.scatter(ens[z_ens_peaks, 0], ens[z_ens_peaks, 2], s=3, color='g', marker='v')
         ax1.set(xlabel='x', ylabel='y')
         ax2.set(xlabel='y', ylabel='z')
         ax3.set(xlabel='x', ylabel='z')
         plt.tight_layout()
         plt.savefig("plots/lorenz_%s_train_pairwise.pdf"%neuron_type)
+        plt.close('all')
 
-        z_x = gaussian_filter1d(x[:, 2], sigma=smooth)
-        z_ens = gaussian_filter1d(xhat_ens[:, 2], sigma=smooth)
-        z_x_maxima = z_x[argrelextrema(z_x, np.greater)]
-        z_ens_maxima = z_ens[argrelextrema(z_ens, np.greater)]
-        p0 = [1, 0, 31]
-        bounds = ((0, -30, 25), (2, 30, 45))
-        param_x, _ = curve_fit(mountain, z_x_maxima[:-1], z_x_maxima[1:], p0=p0, bounds=bounds)
-        param_ens, _ = curve_fit(mountain, z_ens_maxima[:-1], z_ens_maxima[1:], p0=p0, bounds=bounds)
-        error = nrmse(np.array([param_ens[0], param_ens[2]]), target=np.array([param_x[0], param_x[2]]))
-        # error = np.abs(p_best_x[0] - p_best_ens[0])+np.abs(p_best_x[2] - p_best_ens[2])/10
-
+        # Plot tent map and fit the data to a gaussian
+        print('Plotting tent map')
+        trans = int(tt/dt)
+        tar_gauss = gaussian_filter1d(data['x'][trans:], sigma=smooth, axis=0)
+        a_ens_gauss = gaussian_filter1d(data['ens'][trans:], sigma=smooth, axis=0)
+        ens_gauss = np.dot(a_ens_gauss, d_ens_gauss)
+        z_tar_peaks = find_peaks(tar_gauss[:,2], height=0)[0][1:]
+        z_tar_values_horz = np.ravel(tar_gauss[z_tar_peaks, 2][:-1])
+        z_tar_values_vert = np.ravel(tar_gauss[z_tar_peaks, 2][1:])
+        z_ens_peaks = find_peaks(ens_gauss[:,2], height=0)[0][1:]
+        z_ens_values_horz = np.ravel(ens_gauss[z_ens_peaks, 2][:-1])
+        z_ens_values_vert = np.ravel(ens_gauss[z_ens_peaks, 2][1:])
+#         def gaussian(x, mu, sigma, mag):
+#             return mag * np.exp(-0.5*(np.square((x-mu)/sigma)))
+#         p0 = [36, 2, 40]
+#         param_ens, _ = curve_fit(gaussian, z_ens_values_horz, z_ens_values_vert, p0=p0)
+#         param_tar, _ = curve_fit(gaussian, z_tar_values_horz, z_tar_values_vert, p0=p0)
+#         horzs_tar = np.linspace(np.min(z_tar_values_horz), np.max(z_tar_values_horz), 100)
+#         gauss_tar = gaussian(horzs_tar, param_tar[0], param_tar[1], param_tar[2])
+#         horzs_ens = np.linspace(np.min(z_ens_values_horz), np.max(z_ens_values_horz), 100)
+#         gauss_ens = gaussian(horzs_ens, param_ens[0], param_ens[1], param_ens[2])
+#         error = entropy(gauss_ens, gauss_tar)
         fig, ax = plt.subplots()
-        ax.scatter(z_x_maxima[:-1], z_x_maxima[1:], label='target')
-        ax.plot(np.sort(z_x_maxima[:-1]), mountain(np.sort(z_x_maxima[:-1]), *param_x), label='target fit')
-        ax.scatter(z_ens_maxima[:-1], z_ens_maxima[1:], label='ens')
-        ax.plot(np.sort(z_ens_maxima[:-1]), mountain(np.sort(z_ens_maxima[:-1]), *param_ens), label='ens fit')
-        ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$', title='tent_error=%.5f'%error)
+        ax.scatter(z_tar_values_horz, z_tar_values_vert, alpha=0.5, color='r', label='target')
+#         ax.plot(horzs_tar, gauss_tar, color='r', linestyle='--', label='target fit')
+        ax.scatter(z_ens_values_horz, z_ens_values_vert, alpha=0.5, color='b', label='ens')
+#         ax.plot(horzs_ens, gauss_ens, color='b', linestyle='--', label='ens fit')
+        ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$')#, title='error=%.5f'%error)
         plt.legend(loc='upper right')
-        plt.savefig("plots/lorenz_%s_train_tent.pdf"%neuron_type)
+        plt.savefig("plots/lorenz_%s_train_tent.pdf"%(neuron_type))        
+        
+    print("testing")
+    data = go(d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, L=False, t=t, f=f, dt=dt, dt_sample=dt_sample, seed=seed)
 
-    tent_errors = np.zeros(n_tests)
-    for n in range(n_tests):
-        print("test #%s"%n)
-        rng = np.random.RandomState(seed=n)
-        IC = rng.uniform(-1, 1, size=3)
-        IC /= norm(IC, 1)
-        data = go(d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, IC=IC, r=r,
-            learn=False, t=t, f=f, m=m, i=i, dt=dt, dt_sample=dt_sample, seed=seed)
+    tar = f.filt(data['x'], dt=dt_sample)
+    a_ens = f_ens.filt(data['ens'], dt=dt_sample)
+    ens = np.dot(a_ens, d_ens)
+    z_tar_peaks, _ = find_peaks(tar[:,2], height=0)  # gives time indices of z-component-peaks
+    z_ens_peaks, _ = find_peaks(ens[:,2], height=0)
 
-        # reduce data arrays
-        x = f.filt(data['x'], dt=dt_sample)
-        a_ens = f_ens.filt(data['ens'], dt=dt_sample)
-        xhat_ens = np.dot(a_ens, d_ens)
+    fig = plt.figure()    
+    ax = fig.add_subplot(121, projection='3d')
+    ax2 = fig.add_subplot(122, projection='3d')
+    ax.plot(*tar.T, linewidth=0.25)
+#             ax.scatter(*tar[z_tar_peaks].T, color='r', s=1)
+    ax2.plot(*ens.T, linewidth=0.25)
+#             ax2.scatter(*ens[z_ens_peaks].T, color='r', s=1, marker='v')
+    ax.set(xlabel="x", ylabel="y", zlabel="z", xlim=((-20, 20)), ylim=((-10, 30)), zlim=((0, 40)))
+    ax.xaxis.pane.fill = False
+    ax.yaxis.pane.fill = False
+    ax.zaxis.pane.fill = False
+    ax.xaxis.pane.set_edgecolor('w')
+    ax.yaxis.pane.set_edgecolor('w')
+    ax.zaxis.pane.set_edgecolor('w')
+    ax.grid(False)
+    ax2.set(xlabel="x", ylabel="y", zlabel="z", xlim=((-20, 20)), ylim=((-10, 30)), zlim=((0, 40)))
+    ax2.xaxis.pane.fill = False
+    ax2.yaxis.pane.fill = False
+    ax2.zaxis.pane.fill = False
+    ax2.xaxis.pane.set_edgecolor('w')
+    ax2.yaxis.pane.set_edgecolor('w')
+    ax2.zaxis.pane.set_edgecolor('w')
+    ax2.grid(False)
+    plt.savefig("plots/lorenz_%s_test_3D.pdf"%neuron_type)
 
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
-        ax1.plot(x[:,0], x[:,1], linestyle="--", linewidth=0.25)
-        ax2.plot(x[:,1], x[:,2], linestyle="--", linewidth=0.25)
-        ax3.plot(x[:,0], x[:,2], linestyle="--", linewidth=0.25)
-        ax1.plot(xhat_ens[:,0], xhat_ens[:,1], linewidth=0.25)
-        ax2.plot(xhat_ens[:,1], xhat_ens[:,2], linewidth=0.25)
-        ax3.plot(xhat_ens[:,0], xhat_ens[:,2], linewidth=0.25)
-        ax1.set(xlabel='x', ylabel='y')
-        ax2.set(xlabel='y', ylabel='z')
-        ax3.set(xlabel='x', ylabel='z')
-        plt.tight_layout()
-        plt.savefig("plots/lorenz_%s_pairwise_test_%s.pdf"%(neuron_type, n))
-        plt.close()
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
+    ax1.plot(tar[:,0], tar[:,1], linestyle="--", linewidth=0.25)
+    ax2.plot(tar[:,1], tar[:,2], linestyle="--", linewidth=0.25)
+    ax3.plot(tar[:,0], tar[:,2], linestyle="--", linewidth=0.25)
+#             ax2.scatter(tar[z_tar_peaks, 1], tar[z_tar_peaks, 2], s=3, color='r')
+#             ax3.scatter(tar[z_tar_peaks, 0], tar[z_tar_peaks, 2], s=3, color='g')
+    ax1.plot(ens[:,0], ens[:,1], linewidth=0.25)
+    ax2.plot(ens[:,1], ens[:,2], linewidth=0.25)
+    ax3.plot(ens[:,0], ens[:,2], linewidth=0.25)
+#             ax2.scatter(ens[z_ens_peaks, 1], ens[z_ens_peaks, 2], s=3, color='r', marker='v')
+#             ax3.scatter(ens[z_ens_peaks, 0], ens[z_ens_peaks, 2], s=3, color='g', marker='v')
+    ax1.set(xlabel='x', ylabel='y')
+    ax2.set(xlabel='y', ylabel='z')
+    ax3.set(xlabel='x', ylabel='z')
+    plt.tight_layout()
+    plt.savefig("plots/lorenz_%s_test_pairwise.pdf"%neuron_type)
+    plt.close('all')
 
-        a_ens = f_ens.filt(data['ens'], dt=dt_sample)
-        xhat_ens = np.dot(a_ens, d_ens)
-        fig = plt.figure()    
-        ax = fig.add_subplot(111, projection='3d')
-        ax.plot(*xhat_ens.T, linewidth=0.25)
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
-        ax.xaxis.pane.fill = False
-        ax.yaxis.pane.fill = False
-        ax.zaxis.pane.fill = False
-        ax.xaxis.pane.set_edgecolor('w')
-        ax.yaxis.pane.set_edgecolor('w')
-        ax.zaxis.pane.set_edgecolor('w')
-        ax.grid(False)
-        plt.savefig("plots/lorenz_%s_test_%s_3D.pdf"%(n, neuron_type))
-
-        z_x = gaussian_filter1d(x[:, 2], sigma=smooth)
-        z_ens = gaussian_filter1d(xhat_ens[:, 2], sigma=smooth)
-        z_x_maxima = z_x[argrelextrema(z_x, np.greater)]
-        z_ens_maxima = z_ens[argrelextrema(z_ens, np.greater)]
-        p0 = [1, 0, 31]
-        bounds = ((0, -30, 25), (2, 30, 45))
-        param_x, _ = curve_fit(mountain, z_x_maxima[:-1], z_x_maxima[1:], p0=p0, bounds=bounds)
-        param_ens, _ = curve_fit(mountain, z_ens_maxima[:-1], z_ens_maxima[1:], p0=p0, bounds=bounds)
-        error = nrmse(np.array([param_ens[0], param_ens[2]]), target=np.array([param_x[0], param_x[2]]))
-        # error = np.abs(p_best_x[0] - p_best_ens[0])+np.abs(p_best_x[2] - p_best_ens[2])/10
-        tent_errors[n] = error
-
-        fig, ax = plt.subplots()
-        ax.scatter(z_x_maxima[:-1], z_x_maxima[1:], label='target')
-        ax.plot(np.sort(z_x_maxima[:-1]), mountain(np.sort(z_x_maxima[:-1]), *param_x), label='target fit')
-        ax.scatter(z_ens_maxima[:-1], z_ens_maxima[1:], label='ens')
-        ax.plot(np.sort(z_ens_maxima[:-1]), mountain(np.sort(z_ens_maxima[:-1]), *param_ens), label='ens fit')
-        ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$', title='tent_error = %.5f'%error)
-        plt.legend(loc='upper right')
-        plt.savefig("plots/lorenz_%s_tent_test_%s.pdf"%(neuron_type, n))
-        np.savez("data/lorenz_%s_test.npz"%neuron_type, xhat_ens=xhat_ens, x=x)
-
-    mean_ens = np.mean(tent_errors)
-    CI_ens = sns.utils.ci(tent_errors)
-    print('tent_errors: ', tent_errors)
-    print('mean: ', mean_ens)
-    print('confidence intervals: ', CI_ens)
+    # Plot tent map and fit the data to a gaussian
+    print('Plotting tent map')
+    trans = int(tt/dt)
+    tar_gauss = gaussian_filter1d(data['x'][trans:], sigma=smooth, axis=0)
+    a_ens_gauss = gaussian_filter1d(data['ens'][trans:], sigma=smooth, axis=0)
+    ens_gauss = np.dot(a_ens_gauss, d_ens_gauss)
+    z_tar_peaks = find_peaks(tar_gauss[:,2], height=0)[0][1:]
+    z_tar_values_horz = np.ravel(tar_gauss[z_tar_peaks, 2][:-1])
+    z_tar_values_vert = np.ravel(tar_gauss[z_tar_peaks, 2][1:])
+    z_ens_peaks = find_peaks(ens_gauss[:,2], height=0)[0][1:]
+    z_ens_values_horz = np.ravel(ens_gauss[z_ens_peaks, 2][:-1])
+    z_ens_values_vert = np.ravel(ens_gauss[z_ens_peaks, 2][1:])
+#     def gaussian(x, mu, sigma, mag):
+#         return mag * np.exp(-0.5*(np.square((x-mu)/sigma)))
+#     p0 = [36, 2, 40]
+#     param_ens, _ = curve_fit(gaussian, z_ens_values_horz, z_ens_values_vert, p0=p0)
+#     param_tar, _ = curve_fit(gaussian, z_tar_values_horz, z_tar_values_vert, p0=p0)
+#     horzs_tar = np.linspace(np.min(z_tar_values_horz), np.max(z_tar_values_horz), 100)
+#     gauss_tar = gaussian(horzs_tar, param_tar[0], param_tar[1], param_tar[2])
+#     horzs_ens = np.linspace(np.min(z_ens_values_horz), np.max(z_ens_values_horz), 100)
+#     gauss_ens = gaussian(horzs_ens, param_ens[0], param_ens[1], param_ens[2])
+#     error = entropy(gauss_ens, gauss_tar)
     fig, ax = plt.subplots()
-    sns.barplot(data=tent_errors)
-    ax.set(ylabel='Tent Errors', title="mean=%.3f, CI=%.3f-%.3f"%(mean_ens, CI_ens[0], CI_ens[1]))
-    plt.xticks()
-    plt.savefig("plots/lorenz_%s_tent_errors.pdf"%neuron_type)
-    np.savez('data/lorenz_%s_results.npz'%neuron_type, tent_errors=tent_errors)
-    return tent_errors
+    ax.scatter(z_tar_values_horz, z_tar_values_vert, alpha=0.5, color='r', label='target')
+#     ax.plot(horzs_tar, gauss_tar, color='r', linestyle='--', label='target fit')
+    ax.scatter(z_ens_values_horz, z_ens_values_vert, alpha=0.5, color='b', label='ens')
+#     ax.plot(horzs_ens, gauss_ens, color='b', linestyle='--', label='ens fit')
+    ax.set(xlabel=r'$\mathrm{max}_n (z)$', ylabel=r'$\mathrm{max}_{n+1} (z)$')#, title='error=%.5f'%error)
+    plt.legend(loc='upper right')
+    plt.savefig("plots/lorenz_%s_test_tent.pdf"%(neuron_type))        
 
+#     print('error: ', error)
+#     return error
 
-tent_error_lif = run(neuron_type=LIF(), load_fd="data/lorenz_LIF()_fd.npz")
-tent_error_alif = run(neuron_type=AdaptiveLIFT(), load_fd="data/lorenz_AdaptiveLIFT()_fd.npz")
-tent_error_wilson = run(neuron_type=WilsonEuler(), dt=0.00005, load_fd="data/lorenz_WilsonEuler()_fd.npz")
+run(neuron_type=LIF())
+# tent_error_alif = run(neuron_type=AdaptiveLIFT())
+# tent_error_wilson = run(neuron_type=WilsonEuler(), dt=0.00005)
+
+# tent_error_lif = run(neuron_type=LIF(), load_fd="data/lorenz_LIF()_fd.npz")
+# tent_error_alif = run(neuron_type=AdaptiveLIFT(), load_fd="data/lorenz_AdaptiveLIFT()_fd.npz")
+# tent_error_wilson = run(neuron_type=WilsonEuler(), dt=0.00005, load_fd="data/lorenz_WilsonEuler()_fd.npz")
 
 # tent_errors = np.vstack((tent_error_lif, tent_error_alif, tent_error_wilson))
 # nt_names =  ['LIF', 'ALIF', 'Wilson']
@@ -277,52 +299,3 @@ tent_error_wilson = run(neuron_type=WilsonEuler(), dt=0.00005, load_fd="data/lor
 # plt.xticks(np.arange(len(nt_names)), tuple(nt_names), rotation=0)
 # plt.tight_layout()
 # plt.savefig("plots/lorenz_all_errors.pdf")
-
-
-
-# def compare_x(n_neurons=100, neuron_type=LIF(), t_train=30, t=50, f=DoubleExp(1e-3, 1e-1), seed=0,m=Uniform(20, 40), i=Uniform(-1, 0.8), r=40):
-
-#     d_ens = np.zeros((n_neurons, 3))
-#     f_ens = f
-#     rng = np.random.RandomState(seed=0)
-#     IC = rng.uniform(-1, 1, size=3)
-#     IC /= norm(IC, 1)
-
-#     data1 = go(d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, IC=IC, r=r,
-#         learn=True, t=t_train, f=f, m=m, i=i, dt=0.001, dt_sample=0.001, seed=seed)
-#     data2 = go(d_ens, f_ens, neuron_type=neuron_type, n_neurons=n_neurons, IC=IC, r=r,
-#         learn=True, t=t_train, f=f, m=m, i=i, dt=0.0001, dt_sample=0.001, seed=seed)
-#     x1 = data1['x']
-#     x2 = data2['x']
-
-#     fig = plt.figure()    
-#     ax = fig.add_subplot(111, projection='3d')
-#     ax.plot(*x1.T, linewidth=0.25)
-#     ax.set_xlabel("x")
-#     ax.set_ylabel("y")
-#     ax.set_zlabel("z")
-#     ax.xaxis.pane.fill = False
-#     ax.yaxis.pane.fill = False
-#     ax.zaxis.pane.fill = False
-#     ax.xaxis.pane.set_edgecolor('w')
-#     ax.yaxis.pane.set_edgecolor('w')
-#     ax.zaxis.pane.set_edgecolor('w')
-#     ax.grid(False)
-#     plt.savefig("plots/lorenz_%s_train_3D_x1.pdf"%neuron_type)
-
-#     fig = plt.figure()    
-#     ax = fig.add_subplot(111, projection='3d')
-#     ax.plot(*x2.T, linewidth=0.25)
-#     ax.set_xlabel("x")
-#     ax.set_ylabel("y")
-#     ax.set_zlabel("z")
-#     ax.xaxis.pane.fill = False
-#     ax.yaxis.pane.fill = False
-#     ax.zaxis.pane.fill = False
-#     ax.xaxis.pane.set_edgecolor('w')
-#     ax.yaxis.pane.set_edgecolor('w')
-#     ax.zaxis.pane.set_edgecolor('w')
-#     ax.grid(False)
-#     plt.savefig("plots/lorenz_%s_train_3D_x2.pdf"%neuron_type)
-
-#     print(nrmse(x1, target=x2))

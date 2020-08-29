@@ -28,7 +28,8 @@ import warnings
 
 import neuron
 neuron.h.load_file('stdrun.hoc')
-neuron.h.load_file('NEURON/durstewitzDArandom.hoc')
+neuron.h.load_file('NEURON/cells.hoc')
+# neuron.h.load_file('NEURON/durstewitzDArandom.hoc')
 # neuron.h.load_file('NEURON/durstewitzDA.hoc')
 # neuron.h.load_file('NEURON/durstewitz.hoc')
 
@@ -36,6 +37,17 @@ neuron.h.load_file('NEURON/durstewitzDArandom.hoc')
 __all__ = ['LIF', 'AdaptiveLIFT', 'WilsonEuler', 'WilsonRungeKutta', 'DurstewitzNeuron',
     'SimNeuronNeurons', 'TransmitSpikes', 'BiasSpikes', 'TransmitSignal', 'reset_neuron']
 
+class AMPA(nengo.synapses.Synapse):
+    def __init__(self):
+        super().__init__()
+        
+class GABA(nengo.synapses.Synapse):
+    def __init__(self):
+        super().__init__()
+
+class NMDA(nengo.synapses.Synapse):
+    def __init__(self):
+        super().__init__()
 
 class LIF(LIF):
 
@@ -336,13 +348,15 @@ class WilsonRungeKutta(NeuronType):
 
 
 
-class DurstewitzNeuron(NeuronType):
+class BioNeuron(NeuronType):
 
     probeable = ('spikes', 'voltage')
 
-    def __init__(self, DA=0.0, dt_neuron=0.1):
-        super(DurstewitzNeuron, self).__init__()
+    def __init__(self, cell_type, DA=lambda t: 0, dt_neuron=0.1):
+        super(BioNeuron, self).__init__()
+        self.cell_type = cell_type
         self.DA = DA
+        assert callable(DA), "DA attribute of bioneuron must be a lambda function"
         self.dt_neuron = dt_neuron
         self.max_rates = np.array([])
         self.intercepts = np.array([])
@@ -355,44 +369,38 @@ class DurstewitzNeuron(NeuronType):
     def max_rates_intercepts(self, gain, bias):
         return self.max_rates, self.intercepts
     
-    def step_math(self, neurons, v_recs, spk_vecs, spk_recs, spk_before, voltage, spiked, time, dt):
+    def step_math(self, neurons, v_recs, spk_vecs, spk_recs, spk_before, DA, voltage, spiked, time, dt):
         n_neurons = voltage.shape[0]
-#         spk_before = np.array([np.array(spk_vecs[n]) for n in range(n_neurons)])
         if neuron.h.t < time*1000:  # Nengo starts at t=dt
             neuron.h.tstop = time*1000
             neuron.h.continuerun(neuron.h.tstop)
         for n in range(n_neurons):
             volts = [v_recs[n][-i] for i in range(100)] if time > 0.1 else [-65.0]
-            if np.any(np.isnan(volts)):
-#                 warnings.warn('neuron %s returned nan voltage at t=%.0f' %(n, neuron.h.t*1000))
-#                 print(volts)
-#                 neurons[n].set_v(-65.0)
-                voltage[n] = -65
-            else:
-                voltage[n] = v_recs[n][-1]
+            voltage[n] = -65 if np.any(np.isnan(volts)) else v_recs[n][-1]
+            dopamine = DA(time)
+            if type(dopamine) == np.ndarray: dopamine = dopamine[0]  # todo: more elegant
+            neurons[n].set_DA(dopamine)  # update dopamine levels
         spk_after = [list(spk_vecs[n]) for n in range(n_neurons)]
         for n in range(n_neurons):
             spiked[n] = (len(spk_after[n]) - len(spk_before[n])) / dt
             spk_before[n] = list(spk_after[n])
 
 class SimNeuronNeurons(Operator):
-    def __init__(self, neuron_type, n_neurons,  J, output, states, dt):
+    def __init__(self, neuron_type, n_neurons, J, output, states, dt):
         super(SimNeuronNeurons, self).__init__()
         self.neuron_type = neuron_type
-#         self.neurons = [neuron.h.DurstewitzDA(neuron_type.DA) for n in range(n_neurons)]
         rng = np.random.RandomState(seed=0)
-        DAs = [neuron_type.DA for n in range(n_neurons)]
-        rGeos = rng.normal(1, 0.1, size=(n_neurons,))
-        rCms = rng.normal(1, 0.1, size=(n_neurons,))
-        rNAfs = rng.normal(1, 0.005, size=(n_neurons,))
-        rNaps = rng.normal(1, 0.005, size=(n_neurons,))
-        rHvas = rng.normal(1, 0.005, size=(n_neurons,))
-        rKdrs = rng.normal(1, 0.005, size=(n_neurons,))
-        rIKs = rng.normal(1, 0.005, size=(n_neurons,))
-        rICs = rng.normal(1, 0.005, size=(n_neurons,))
-        self.neurons = [neuron.h.DurstewitzDArandom(
-            DAs[n], rGeos[n], rCms[n], rNAfs[n], rHvas[n], rNaps[n], rKdrs[n], rIKs[n], rICs[n])
-            for n in range(n_neurons)]
+        rGeos = rng.normal(1, 0.2, size=(n_neurons,))
+        rCms = rng.normal(1, 0.05, size=(n_neurons,))
+        rRs = rng.normal(1, 0.1, size=(n_neurons,))
+        self.neurons = []
+        for n in range(n_neurons):
+            if self.neuron_type.cell_type == 'Pyramidal':
+                self.neurons.append(neuron.h.Pyramidal(rGeos[n], rCms[n], rRs[n]))
+            elif self.neuron_type.cell_type == 'Interneuron':
+                self.neurons.append(neuron.h.Interneuron(rGeos[n], rCms[n], rRs[n]))
+            else:
+                raise "Cell Type %s not understood"%neuron_type.cell_type
         self.reads = [states[0], J]
         self.sets = [output, states[1]]
         self.updates = []
@@ -401,6 +409,7 @@ class SimNeuronNeurons(Operator):
         self.spk_vecs = []
         self.spk_recs = []
         self.spk_before = [[] for n in range(n_neurons)]
+        self.DA = neuron_type.DA
         for n in range(n_neurons):
             self.v_recs.append(neuron.h.Vector())
             self.v_recs[n].record(self.neurons[n].soma(0.5)._ref_v)
@@ -416,8 +425,7 @@ class SimNeuronNeurons(Operator):
         time = signals[self.time]
         def step_nrn():
             self.neuron_type.step_math(
-                self.neurons, self.v_recs, self.spk_vecs, self.spk_recs, self.spk_before,
-                voltage, output, time, dt)
+                self.neurons, self.v_recs, self.spk_vecs, self.spk_recs, self.spk_before, self.DA, voltage, output, time, dt)
         return step_nrn
     @property
     def time(self):
@@ -433,7 +441,7 @@ class SimNeuronNeurons(Operator):
         return self.sets[1]
 
 class TransmitSpikes(Operator):
-    def __init__(self, neurons, netcons, spikes, states, dt):
+    def __init__(self, neurons, netcons, spikes, DA, states, dt):
         super(TransmitSpikes, self).__init__()
         self.neurons = neurons
         self.dt = dt
@@ -443,6 +451,7 @@ class TransmitSpikes(Operator):
         self.sets = []
         self.incs = []
         self.netcons = netcons
+        self.DA = DA
     def make_step(self, signals, dt, rng):
         spikes = signals[self.spikes]
         time = signals[self.time]
@@ -451,6 +460,10 @@ class TransmitSpikes(Operator):
             for pre in range(spikes.shape[0]):
                 if spikes[pre] > 0:
                     for post in range(len(self.neurons)):
+                        # update dopamine levels
+                        if hasattr(self.netcons[pre, post].syn(), 'DA'):
+                            self.netcons[pre, post].syn().DA = self.DA(time.item())
+                        # deliver spike
                         self.netcons[pre, post].event(t_neuron)
         return step
     @property
@@ -461,37 +474,48 @@ class TransmitSpikes(Operator):
 def build_connection(model, conn):
     is_ens = isinstance(conn.post_obj, nengo.Ensemble)
     is_neurons = isinstance(conn.post_obj, nengo.ensemble.Neurons)
-    is_durstewitz = False
+    is_NEURON = False
     
     if is_ens:
-        if isinstance(conn.post_obj.neuron_type, DurstewitzNeuron):
-            is_durstewitz = True
+        if isinstance(conn.post_obj.neuron_type, BioNeuron):
+            is_NEURON = True
         else:
-            is_durstewitz = False
+            is_NEURON = False
     elif is_neurons:
-        if isinstance(conn.post_obj.ensemble.neuron_type, DurstewitzNeuron):
-            is_durstewitz = True
+        if isinstance(conn.post_obj.ensemble.neuron_type, BioNeuron):
+            is_NEURON = True
     else:
         is_ens = False
         is_neurons = False
-        is_durstewitz = False
+        is_NEURON = False
 
-    if is_durstewitz:
+    if is_NEURON:
         model.sig[conn]['in'] = model.sig[conn.pre_obj]['out']
         assert isinstance(conn.pre_obj, nengo.Ensemble) and 'spikes' in conn.pre_obj.neuron_type.probeable
-        assert isinstance(conn.synapse, LinearSystem), "only nengolib synapses supported"
-        assert len(conn.synapse.num) == 0, "only poles supported"
-        assert 0 < len(conn.synapse.den) <= 2, "only exponential and double exponential synapses supported"
         post_obj = conn.post_obj if is_ens else conn.post_obj.ensemble
         pre_obj = conn.pre_obj
-        taus = -1.0/np.array(conn.synapse.poles) * 1000  # convert to ms
+        
+        if isinstance(conn.synapse, AMPA):
+            taus = "AMPA"
+        elif isinstance(conn.synapse, GABA):
+            taus = "GABA"
+        elif isinstance(conn.synapse, NMDA):
+            taus = "NMDA"
+        elif isinstance(conn.synapse, LinearSystem):
+            taus = -1.0/np.array(conn.synapse.poles) * 1000  # convert to ms
+        else:
+            raise "synapse type %s not understood (connection %s)"%(conn.synapse, conn)
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")        
             conn.rng = np.random.RandomState(model.seeds[conn])
             # conn.e = conn.rng.uniform(-1, 1, size=(pre_obj.n_neurons, post_obj.n_neurons, post_obj.dimensions))
             conn.e = np.zeros((pre_obj.n_neurons, post_obj.n_neurons, post_obj.dimensions))
             conn.locations = conn.rng.uniform(0, 1, size=(pre_obj.n_neurons, post_obj.n_neurons))
-            conn.compartments = conn.rng.randint(0, 3, size=(pre_obj.n_neurons, post_obj.n_neurons))  # 0=proximal, 1=distal, 2=basal
+            if post_obj.neuron_type.cell_type == "Pyramidal":
+                conn.compartments = conn.rng.randint(0, 3, size=(pre_obj.n_neurons, post_obj.n_neurons))  # 0=proximal, 1=distal, 2=basal
+            elif post_obj.neuron_type.cell_type == "Interneuron":
+                conn.compartments = np.zeros(shape=(pre_obj.n_neurons, post_obj.n_neurons))  # 0=dendrite
             conn.synapses = np.zeros((pre_obj.n_neurons, post_obj.n_neurons), dtype=list)
             conn.netcons = np.zeros((pre_obj.n_neurons, post_obj.n_neurons), dtype=list)
             conn.weights = np.zeros((pre_obj.n_neurons, post_obj.n_neurons))
@@ -506,19 +530,32 @@ def build_connection(model, conn):
                 conn.weights[pre, post] = np.dot(conn.d[pre], conn.e[pre, post])
                 reversal = 0.0 if conn.weights[pre, post] > 0 else -70.0
                 if conn.compartments[pre, post] == 0:
-                    loc = nrn.prox(conn.locations[pre, post])
+                    if post_obj.neuron_type.cell_type == "Pyramidal":
+                        loc = nrn.prox(conn.locations[pre, post])
+                    elif post_obj.neuron_type.cell_type == "Interneuron":
+                        loc = nrn.dendrite(conn.locations[pre, post])
                 elif conn.compartments[pre, post] == 1:
                     loc = nrn.dist(conn.locations[pre, post])
                 else:
                     loc = nrn.basal(conn.locations[pre, post])
-                if len(taus) == 1:
+                if type(taus) == str:
+                    if taus == "AMPA":
+                        syn = neuron.h.ampa(loc)
+                    elif taus == "GABA":
+                        syn = neuron.h.gaba(loc)
+                    elif taus == "NMDA":
+                        syn = neuron.h.nmda(loc)
+                    else:
+                        raise "synapse %s not understood"%taus
+                elif len(taus) == 1:
                     syn = neuron.h.ExpSyn(loc)
                     syn.tau = taus[0]
                     syn.e = reversal
                 elif len(taus) == 2:
-                    syn = neuron.h.Exp2Syn(loc)
-                    syn.tau1 = np.min(taus)
-                    syn.tau2 = np.max(taus)
+#                     syn = neuron.h.Exp2Syn(loc)
+                    syn = neuron.h.doubleexp(loc)
+                    syn.tauRise = np.min(taus)
+                    syn.tauFall = np.max(taus)
                     syn.e = reversal
                 conn.synapses[pre, post] = syn
                 conn.netcons[pre, post] = neuron.h.NetCon(None, conn.synapses[pre, post])
@@ -526,7 +563,7 @@ def build_connection(model, conn):
             conn.v_recs.append(neuron.h.Vector())
             conn.v_recs[post].record(nrn.soma(0.5)._ref_v)
         transmitspike = TransmitSpikes(model.params[post_obj.neurons], conn.netcons,
-            model.sig[conn.pre_obj]['out'], states=[model.time], dt=model.dt)
+            model.sig[conn.pre_obj]['out'], DA=post_obj.neuron_type.DA, states=[model.time], dt=model.dt)
         model.add_op(transmitspike)
         conn.transmitspike = transmitspike
         model.params[conn] = BuiltConnection(
@@ -630,7 +667,7 @@ def build_wilsonneuron(model, neuron_type, neurons):
                 model.sig[neurons]['recovery'],
                 model.sig[neurons]['conductance']]))
     
-@Builder.register(DurstewitzNeuron)
+@Builder.register(BioNeuron)
 def build_neuronneuron(model, neuron_type, neurons):
     model.sig[neurons]['voltage'] = Signal(
 #         neuron_type.v0*np.ones(neurons.size_in), name="%s.voltage"%neurons)

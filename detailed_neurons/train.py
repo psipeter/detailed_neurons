@@ -1,11 +1,9 @@
 import numpy as np
-
 from scipy.linalg import block_diag
 from scipy.integrate import ode
 from scipy.optimize import minimize
 from scipy.integrate import quad
 from scipy.stats import norm
-
 import nengo
 from nengo.utils.matplotlib import rasterplot
 from nengo.params import Default, NumberParam
@@ -19,28 +17,16 @@ from nengo.builder import Builder, Operator, Signal
 from nengo.exceptions import BuildError
 from nengo.builder.connection import build_decoders, BuiltConnection
 from nengo.utils.builder import full_transform
-
+from nengo.utils.numpy import rmse
 from nengolib.signal import s, z, nrmse, LinearSystem
 from nengolib import Lowpass, DoubleExp
 from nengolib.synapses import ss2sim
-
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials, base
 base.have_bson = False
-
+from neuron_models import AdaptiveLIFT, WilsonEuler, BioNeuron, reset_neuron
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set(context='poster', style='white')
-
-from neuron_models import AdaptiveLIFT, WilsonEuler, DurstewitzNeuron, reset_neuron
-# from utils import bin_activities_values_single
-
-# import neuron
-# neuron.h.load_file('NEURON/durstewitz.hoc')
-# neuron.h.load_file('stdrun.hoc')
-
-
-__all__ = ['norms', 'd_opt', 'df_opt', 'LearningNode']
-
     
 def norms(t, dt=0.001, stim_func=lambda t: np.cos(t), f=None, value=1.0):
     with nengo.Network() as model:
@@ -58,7 +44,7 @@ def d_opt(target, spikes, h, h_tar, reg=1e-1, dt=0.001):
     return d_new
 
 def df_opt(x, ens, f, name='default', df_evals=100, seed=0, dt=0.001, dt_sample=0.001, reg=0,
-        tau_rise=[1e-2, 1e-1], tau_fall=[1e-2, 3e-1], penalty=0, algo=tpe.suggest):  # rand.suggest):#
+        tau_rise=[1e-3, 1e-1], tau_fall=[1e-2, 3e-1], penalty=0, algo=tpe.suggest):  # rand.suggest):#
 
     x = f.filt(x, dt=dt)
     np.savez_compressed('data/%s_ens.npz'%name, ens=ens)
@@ -87,7 +73,7 @@ def df_opt(x, ens, f, name='default', df_evals=100, seed=0, dt=0.001, dt_sample=
         else:
             d_ens = Lstsq()(A, x)[0]
         xhat = np.dot(A, d_ens)
-        loss = nrmse(xhat, target=x)
+        loss = rmse(xhat, x)
         loss += penalty * (10*taus_ens[0] + taus_ens[1])
         return {'loss': loss, 'taus_ens': taus_ens, 'd_ens': d_ens, 'status': STATUS_OK}
     
@@ -136,7 +122,7 @@ def df_opt_hx(x, ens, name='default', df_evals=100, seed=0, dt=0.001, dt_sample=
             x = x[::int(dt_sample/dt)]
         d_ens = Lstsq()(A, x)[0]
         xhat = np.dot(A, d_ens)
-        loss = nrmse(xhat, target=x)
+        loss = rmse(xhat, x)
         loss += penalty * taus_ens[1]
         return {'loss': loss, 'taus_ens': taus_ens, 'taus_x': taus_x, 'd_ens': d_ens, 'status': STATUS_OK}
     
@@ -297,7 +283,7 @@ class LearningNode(nengo.Node):
     
     
 class LearningNode2(nengo.Node):
-    def __init__(self, N, N_pre, conn, conn_supv=None, k=1e-5, seed=0):
+    def __init__(self, N, N_pre, conn, conn_supv=None, k=1e-5, t_trans=0.01, exc=False, inh=False, seed=0):
         self.N = N
         self.N_pre = N_pre
         self.conn = conn
@@ -306,11 +292,17 @@ class LearningNode2(nengo.Node):
         self.size_in = 2*N+N_pre
         self.size_out = 0
         self.k = k
-        self.rng = np.random.RandomState(seed=seed)
+        self.t_trans = t_trans
+        self.exc = exc
+        self.inh = inh
+        if self.exc and self.inh:
+            raise "can't force excitatory and inhibitory weights"
+        self.rng = np.random.RandomState(seed=seed)               
         super(LearningNode2, self).__init__(
             self.step, size_in=self.size_in, size_out=self.size_out)
     def step(self, t, x):
-        if t < 0.01: return
+        if t < self.t_trans:
+            return
         a_pre = x[:self.N_pre]
         a_bio = x[self.N_pre: self.N_pre+self.N]
         a_supv = x[self.N_pre+self.N:]
@@ -337,7 +329,144 @@ class LearningNode2(nengo.Node):
                     delta_e = sign * self.k * a_pre[pre]
                     self.conn.e[pre, post, dim] += delta_a * delta_e
             w = np.dot(self.conn.d[pre], self.conn.e[pre, post])
+            if self.exc and w < 0:
+                w = 0
+            if self.inh and w > 0:
+                w = 0
+            self.conn.weights[pre, post] = w 
+            self.conn.netcons[pre, post].weight[0] = np.abs(w)
+#             print(dir(self.conn.netcons[pre, post].syn()))
+            self.conn.netcons[pre, post].syn().e = 0.0 if w > 0 else -70.0
+        return
+    
+class WNode(nengo.Node):
+    def __init__(self, conn, alpha=1e-5, t_trans=0.01, exc=False, inh=False, seed=0):
+        self.conn = conn
+        self.nPre = conn.pre.n_neurons
+        self.nPost = conn.post.n_neurons
+        self.check = 10
+        self.size_in = self.nPre+2*self.nPost
+        self.alpha = alpha
+        self.t_trans = t_trans
+        self.exc = exc
+        self.inh = inh
+        self.rng = np.random.RandomState(seed=seed)               
+        if self.exc and self.inh:
+            raise "can't force excitatory and inhibitory weights"
+        super().__init__(self.step, size_in=self.size_in, size_out=0)
+    def step(self, t, x):
+        if t < self.t_trans: return
+        assert self.conn.weights.shape[0] == self.nPre
+        assert self.conn.weights.shape[1] == self.nPost
+        a_pre = x[:self.nPre]
+        a_bio = x[self.nPre: self.nPre+self.nPost]
+        a_supv = x[self.nPre+self.nPost:]
+        pre = self.rng.randint(0, self.nPre)
+        for post in range(self.nPost):
+            volts = np.array([self.conn.v_recs[post][-n] for n in range(self.check)])
+            if np.any(np.isnan(volts)): # no weight update if voltage is nan
+                continue
+            else:
+                condition1 = a_bio[post] > 50
+                condition2 = len(np.where((volts > -40) & (volts < 5))[0]) == self.check             
+                if condition1 or condition2: # check for oversaturation
+                    for pp in range(self.nPre): self.conn.e[pp, post] *= 0.9
+                    continue
+            delta_a = a_bio[post] - a_supv[post]
+            for dim in range(self.conn.d.shape[1]):
+                sign = -1 if self.conn.d[pre, dim] >= 0 else 1
+                delta_e = sign * self.alpha * a_pre[pre]
+                self.conn.e[pre, post, dim] += delta_a * delta_e
+            w = np.dot(self.conn.d[pre], self.conn.e[pre, post])
+            if self.exc and w < 0: w = 0
+            if self.inh and w > 0: w = 0
             self.conn.weights[pre, post] = w 
             self.conn.netcons[pre, post].weight[0] = np.abs(w)
             self.conn.netcons[pre, post].syn().e = 0.0 if w > 0 else -70.0
         return
+    
+def mixedLstSq(aExc, aInh, target, dt=0.001, dMin=-1e-3, dMax=1e-3, evals=100, seed=0):
+    def objective(hyperparams):
+        aExc = np.load('data/mixedLstSq.npz')['aExc']
+        aInh = np.load('data/mixedLstSq.npz')['aInh']
+        target = np.load('data/mixedLstSq.npz')['target']
+        dExc = [hyperparams["exc"+str(n)] for n in range(aExc.shape[1])]
+        dInh = [hyperparams["inh"+str(n)] for n in range(aInh.shape[1])]
+        d = np.hstack((dExc, dInh)).T
+        A = np.hstack((aExc, aInh))
+#         print(d.shape)
+#         print(A.shape)
+        xhat = np.dot(A, d)
+        loss = rmse(xhat, target)
+        result = {'loss': loss, 'status': STATUS_OK}
+        for i in range(d.shape[0]):
+            result[i] = d[i]
+        return result
+    np.savez_compressed('data/mixedLstSq.npz', aExc=aExc, aInh=aInh, target=target)
+    hyperparams = {}
+    hyperparams['dt'] = dt
+    for n in range(aExc.shape[1]):
+        hyperparams["exc"+str(n)] = hp.uniform("exc"+str(n), 0, dMax)
+    for n in range(aInh.shape[1]):
+        hyperparams["inh"+str(n)] = hp.uniform("inh"+str(n), dMin, 0)
+    trials = Trials()
+    fmin(objective,
+        rstate=np.random.RandomState(seed=seed),
+        space=hyperparams,
+        algo=tpe.suggest,
+        max_evals=evals,
+        trials=trials)
+    best_idx = np.argmin(trials.losses())
+    best = trials.trials[best_idx]
+#     taus_ens = best['result']['taus_ens']
+#     d_ens = best['result']['d_ens']
+#     h_ens = DoubleExp(taus_ens[0], taus_ens[1])
+    dExc = np.array([best['result'][i] for i in range(aExc.shape[1])])
+    dInh = np.array([best['result'][aExc.shape[1]+i] for i in range(aExc.shape[1])])
+    return dExc, dInh
+  
+    
+# # Calculate Lyapunov Exponent
+# start = int(t_lyaps[0]/dt_sample)
+# end = int(t_lyaps[1]/dt_sample)
+# one_time = np.arange(0, t, dt)[start:end]
+# times = np.zeros((n_trains, one_time.shape[0]))
+# delta_tars = np.zeros((n_trains, one_time.shape[0]))
+# delta_enss = np.zeros((n_trains, one_time.shape[0]))
+# for ntrn in range(n_trains):
+#     tar1 = f.filt(targets[ntrn-1], dt=dt_sample)[start:end]
+#     tar2 = f.filt(targets[ntrn], dt=dt_sample)[start:end]
+# #             tar1 = gaussian_filter1d(targets[ntrn-1], sigma=smooth, axis=0)[start:end]
+# #             tar2 = gaussian_filter1d(targets[ntrn], sigma=smooth, axis=0)[start:end]
+#     a_ens1 = f_ens.filt(spikes[ntrn-1], dt=dt_sample)[start:end]
+#     a_ens2 = f_ens.filt(spikes[ntrn], dt=dt_sample)[start:end]
+#     ens1 = np.dot(a_ens1, d_ens)
+#     ens2 = np.dot(a_ens2, d_ens)
+#     times[ntrn] = one_time
+#     delta_tars[ntrn] = np.sqrt(
+#         np.square(np.abs(tar1[:,0]-tar2[:,0])) + 
+#         np.square(np.abs(tar1[:,1]-tar2[:,1])) + 
+#         np.square(np.abs(tar1[:,2]-tar2[:,2])))
+#     delta_enss[ntrn] = np.sqrt(
+#         np.square(np.abs(ens1[:,0]-ens2[:,0])) + 
+#         np.square(np.abs(ens1[:,1]-ens2[:,1])) + 
+#         np.square(np.abs(ens1[:,2]-ens2[:,2])))
+# all_times = times.reshape(n_trains*one_time.shape[0])
+# delta_tar = delta_tars.reshape(n_trains*one_time.shape[0])
+# delta_ens = delta_enss.reshape(n_trains*one_time.shape[0])
+# slope_tar, intercept_tar, _, _, _ = linregress(all_times, np.log(delta_tar))
+# if np.all(delta_ens > 0):
+#     slope_ens, intercept_ens, _, _, _ = linregress(all_times, np.log(delta_ens))
+#     error = np.abs(slope_ens - slope_tar) / slope_tar
+# else:
+#     print('trajectory pair %s, %s have identical points'%(ntrn-1, ntrn))
+#     error = np.inf
+# fig, ax = plt.subplots()
+# ax.scatter(all_times, np.log(delta_tar), s=0.3, color='r', label='target')
+# ax.plot(one_time, slope_tar*one_time+intercept_tar, color='r', linestyle="--", label='target fit, slope=%.4f'%slope_tar)
+# if np.all(delta_ens > 0):
+#     ax.scatter(all_times, np.log(delta_ens), s=0.3, color='b', label='ens')
+#     ax.plot(one_time, slope_ens*one_time+intercept_ens, color='b', linestyle="--", label='ens fit, slope=%.4f'%slope_ens)
+# ax.legend()
+# ax.set(xlabel='time', ylabel='log euclidian distance between trajectory pair', title='error=%.3f'%error)
+# fig.savefig("plots/lorenz_%s_train_lyapunov.pdf"%neuron_type)

@@ -83,7 +83,7 @@ def goLIF(dFFAMPA, dFFNMDA, dFBAMPA, dFBNMDA, wEnsInhAMPA, wEnsInhNMDA, wInhFdfw
         inpt = nengo.Node(stim)
         intg = nengo.Ensemble(1, 1, neuron_type = nengo.Direct())
         fdfw = nengo.Ensemble(N, 1, seed=seed)
-        inh = nengo.Ensemble(N, 1, encoders=Choice([[1]]), intercepts=Uniform(0.2, 1), neuron_type=nengo.LIF(), seed=seed)
+        inh = nengo.Ensemble(N, 1, encoders=Choice([[1]]), intercepts=Uniform(0, 1), neuron_type=nengo.LIF(), seed=seed)
         ens = nengo.Ensemble(N, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)
         nengo.Connection(inpt, intg, synapse=1/s)
         nengo.Connection(inpt, fdfw, synapse=None)
@@ -122,19 +122,20 @@ fAMPA = DoubleExp(5.5e-4, 2.2e-3)
 fNMDA = DoubleExp(1e-2, 2.85e-1)
 fGABA = DoubleExp(5e-4, 1.5e-3)
 rng = np.random.RandomState(seed=0)
-wEnsInhAMPA = 1.5
-wEnsInhNMDA = 1.5
-wInhFdfw = rng.uniform(-1e-4, 0, size=(N, N))
-wInhEns = rng.uniform(-4e-5, 0, size=(N, N))
+kAMPA = 0.1
+kNMDA = 0.7
+kGABA = 0.8
+wEnsInhAMPA = 0.2
+wEnsInhNMDA = 2
+wInhFdfw = rng.uniform(-1.25e-3, 0, size=(N, N))
+wInhEns = rng.uniform(-1e-4, 0, size=(N, N))
 t = 10
 dt = 0.001
 u = makeSignal(t=t, dt=dt, period=t, f=fNMDA)
 stim = lambda t: u[int(t/dt)]
 
 # Stage 1 - feedforward decoders from fdfw to ens
-
 data = goLIF(dFFAMPA, dFFNMDA, dFBAMPA, dFBNMDA, wEnsInhAMPA, wEnsInhNMDA, wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
-
 aFdfwAMPA = fAMPA.filt(data['fdfw'])
 aFdfwNMDA = fNMDA.filt(data['fdfw'])
 targetAMPA = fAMPA.filt(data['inpt'])
@@ -143,52 +144,34 @@ dFFAMPA, _ = LstsqL2(reg=1e-2)(aFdfwAMPA, targetAMPA)
 dFFNMDA, _ = LstsqL2(reg=1e-2)(aFdfwNMDA, targetNMDA)
 xhatFFAMPA = np.dot(aFdfwAMPA, dFFAMPA)
 xhatFFNMDA = np.dot(aFdfwNMDA, dFFNMDA)
+# fig, ax = plt.subplots()
+# ax.plot(data['times'], targetAMPA, linestyle="--", label='target (AMPA)')
+# ax.plot(data['times'], targetNMDA, linestyle="--", label='target (NMDA)')
+# ax.plot(data['times'], xhatFFAMPA, alpha=0.5, label='fdfw (AMPA)')
+# ax.plot(data['times'], xhatFFNMDA, alpha=0.5, label='fdfw (NMDA)')
+# ax.legend()
+# ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
+# fig.savefig("plots/gatedMemory_goLIF_fdfw.pdf")
 
-fig, ax = plt.subplots()
-ax.plot(data['times'], targetAMPA, linestyle="--", label='target (AMPA)')
-ax.plot(data['times'], targetNMDA, linestyle="--", label='target (NMDA)')
-ax.plot(data['times'], xhatFFAMPA, alpha=0.5, label='fdfw (AMPA)')
-ax.plot(data['times'], xhatFFNMDA, alpha=0.5, label='fdfw (NMDA)')
-ax.legend()
-ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
-fig.savefig("plots/gatedMemory_goLIF_fdfw.pdf")
-
-# Stage 2 - readout decoders for ens
-# assume ens excited inh and inh inhibits ens, but that inh does not inhibit fdfw
-# produce separate FB decoders for AMPA and NMDA, assuming just those connections are fdfw
-
-data = goLIF(dFFAMPA, 0*dFFNMDA, dFBAMPA, 0*dFBNMDA, wEnsInhAMPA, wEnsInhNMDA, 0*wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
-aEnsAMPA = fAMPA.filt(data['ens'])
-targetAMPA = fAMPA.filt(fAMPA.filt(data['inpt']))
-dFBAMPA, _ = LstsqL2(reg=1e-2)(aEnsAMPA, targetAMPA)
-xhatFBAMPA = np.dot(aEnsAMPA, dFBAMPA)
-fig, ax = plt.subplots()
-ax.plot(data['times'], targetAMPA, linestyle="--", label='target (AMPA)')
-ax.plot(data['times'], xhatFBAMPA, alpha=0.5, label='ens (AMPA)')
-# ax.plot(data['times'], data['inhState'], alpha=0.5, label='inh')
-ax.legend()
-ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
-fig.savefig("plots/gatedMemory_goLIFAMPA_ens.pdf")
-
-data = goLIF(0*dFFAMPA, dFFNMDA, 0*dFBAMPA, dFBNMDA, wEnsInhAMPA, wEnsInhNMDA, 0*wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
+# Stage 2 - readout decoders for ens; assume high DA condition and inh-ens, and only get NMDA decoders
+data = goLIF(kAMPA*dFFAMPA, dFFNMDA, kAMPA*dFBAMPA, dFBNMDA, kAMPA*wEnsInhAMPA, wEnsInhNMDA, 0*wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
 aEnsNMDA = fNMDA.filt(data['ens'])
 targetNMDA = fNMDA.filt(fNMDA.filt(data['inpt']))
 dFBNMDA, _ = LstsqL2(reg=1e-2)(aEnsNMDA, targetNMDA)
+dFBAMPA = rng.uniform(0, 1e-4, size=(N, 1))  # negligable feedback
 xhatFBNMDA = np.dot(aEnsNMDA, dFBNMDA)
-fig, ax = plt.subplots()
-ax.plot(data['times'], targetNMDA, linestyle="--", label='target (NMDA)')
-ax.plot(data['times'], xhatFBNMDA, alpha=0.5, label='ens (NMDA)')
+# fig, ax = plt.subplots()
+# ax.plot(data['times'], targetNMDA, linestyle="--", label='target (NMDA)')
+# ax.plot(data['times'], xhatFBNMDA, alpha=0.5, label='ens (NMDA)')
 # ax.plot(data['times'], data['inhState'], alpha=0.5, label='inh')
-ax.legend()
-ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
-fig.savefig("plots/gatedMemory_goLIFNMDA_ens.pdf")
+# ax.legend()
+# ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
+# fig.savefig("plots/gatedMemory_goLIF_fdbk.pdf")
 
-# dFFAMPA *= 0.0022
+# Stage 3 - test integration in high vs low DA; assume inh-ens
+# high DA
 dFFNMDA *= 0.285
-
-# Stage 3 - test integration without inh inhibiting fdfw
-# assume high DA condition: (1) normal NMDA weights (2) normal GABA weights (3) reduced AMPA weights
-data = goLIF(0*dFFAMPA, dFFNMDA, 0*dFBAMPA, dFBNMDA, wEnsInhAMPA, wEnsInhNMDA, 0*wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
+data = goLIF(kAMPA*dFFAMPA, dFFNMDA, kAMPA*dFBAMPA, dFBNMDA, kAMPA*wEnsInhAMPA, wEnsInhNMDA, 0*wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
 aFdfwNMDA = fNMDA.filt(data['fdfw'])
 targetNMDA = fNMDA.filt(data['inpt'])
 xhatFFNMDA = np.dot(aFdfwNMDA, dFFNMDA)
@@ -200,31 +183,31 @@ ax.plot(data['times'], targetNMDA, linestyle="--", label='input (NMDA)')
 ax.plot(data['times'], xhatFFNMDA, alpha=0.5, label='fdfw (NMDA)')
 ax.plot(data['times'], targetIntgNMDA, linestyle="--", label='integral (NMDA)')
 ax.plot(data['times'], xhatIntgNMDA, alpha=0.5, label='ens (NMDA)')
+ax.plot(data['times'], data['inhState'], alpha=0.5, label='inh')
 ax.legend()
 ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
-fig.savefig("plots/gatedMemory_goLIF_intgNMDA.pdf")
-
-# dFFAMPA *= 0.0022
-data = goLIF(dFFAMPA, 0*dFFNMDA, dFBAMPA, 0*dFBNMDA, wEnsInhAMPA, wEnsInhNMDA, 0*wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
-aFdfwAMPA = fAMPA.filt(data['fdfw'])
-targetAMPA = fAMPA.filt(data['inpt'])
-xhatFFAMPA = np.dot(aFdfwAMPA, dFFAMPA)
-aEnsAMPA = fAMPA.filt(data['ens'])
-targetIntgAMPA = fAMPA.filt(data['intg'])
-xhatIntgAMPA = np.dot(aEnsAMPA, dFBAMPA)
+fig.savefig("plots/gatedMemory_goLIF_intg_highDA.pdf")
+# low DA
+data = goLIF(dFFAMPA, kNMDA*dFFNMDA, dFBAMPA, kNMDA*dFBNMDA, wEnsInhAMPA, kNMDA*wEnsInhNMDA, 0*wInhFdfw, kGABA*wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
+aFdfwNMDA = fNMDA.filt(data['fdfw'])
+targetNMDA = fNMDA.filt(data['inpt'])
+xhatFFNMDA = np.dot(aFdfwNMDA, dFFNMDA)
+aEnsNMDA = fNMDA.filt(data['ens'])
+targetIntgNMDA = fNMDA.filt(data['intg'])
+xhatIntgNMDA = np.dot(aEnsNMDA, dFBNMDA)
 fig, ax = plt.subplots()
-ax.plot(data['times'], targetAMPA, linestyle="--", label='input (AMPA)')
-ax.plot(data['times'], xhatFFAMPA, alpha=0.5, label='fdfw (AMPA)')
-ax.plot(data['times'], targetIntgAMPA, linestyle="--", label='integral (AMPA)')
-ax.plot(data['times'], xhatIntgAMPA, alpha=0.5, label='ens (AMPA)')
+ax.plot(data['times'], targetNMDA, linestyle="--", label='input (NMDA)')
+ax.plot(data['times'], xhatFFNMDA, alpha=0.5, label='fdfw (NMDA)')
+ax.plot(data['times'], targetIntgNMDA, linestyle="--", label='integral (NMDA)')
+ax.plot(data['times'], xhatIntgNMDA, alpha=0.5, label='ens (NMDA)')
+ax.plot(data['times'], data['inhState'], alpha=0.5, label='inh')
 ax.legend()
 ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
-fig.savefig("plots/gatedMemory_goLIF_intgAMPA.pdf")
+fig.savefig("plots/gatedMemory_goLIF_intg_lowDA.pdf")
 
 
-# Stage 4 - test integration with inh inhibiting fdfw
-# High DA
-data = goLIF(0.5*dFFAMPA, dFFNMDA, 0.5*dFBAMPA, dFBNMDA, 0.5*wEnsInhAMPA, wEnsInhNMDA, wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
+# Stage 4 - test integration with inh-fdfw in high vs low DA
+data = goLIF(kAMPA*dFFAMPA, dFFNMDA, kAMPA*dFBAMPA, dFBNMDA, kAMPA*wEnsInhAMPA, wEnsInhNMDA, wInhFdfw, wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
 aFdfw = fNMDA.filt(data['fdfw'])
 target = fNMDA.filt(data['inpt'])
 xhatFF = np.dot(aFdfw, dFFNMDA)
@@ -236,19 +219,13 @@ ax.plot(data['times'], target, linestyle="--", label='input')
 ax.plot(data['times'], xhatFF, alpha=0.5, label='fdfw')
 ax.plot(data['times'], targetIntg, linestyle="--", label='integral')
 ax.plot(data['times'], xhatIntg, alpha=0.5, label='ens')
-# ax.plot(data['times'], data['inhState'], alpha=0.5, label='inh')
+ax.plot(data['times'], data['inhState'], alpha=0.5, label='inh')
 ax.legend()
 ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
-fig.savefig("plots/gatedMemory_goLIF_highDA.pdf")
+fig.savefig("plots/gatedMemory_goLIF_inh_highDA.pdf")
 
 # Low DA
-data = goLIF(dFFAMPA, 0.5*dFFNMDA, dFBAMPA, 0.5*dFBNMDA, wEnsInhAMPA, 0.5*wEnsInhNMDA, 0.5*wInhFdfw, 0.5*wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
-# aFdfwAMPA = fAMPA.filt(data['fdfw'])
-# targetAMPA = fAMPA.filt(data['inpt'])
-# xhatFFAMPA = np.dot(aFdfwAMPA, dFFAMPA)
-# aEnsAMPA = fAMPA.filt(data['ens'])
-# targetIntgAMPA = fAMPA.filt(data['intg'])
-# xhatIntgAMPA = np.dot(aEnsAMPA, dFBAMPA)
+data = goLIF(dFFAMPA, kNMDA*dFFNMDA, dFBAMPA, kNMDA*dFBNMDA, wEnsInhAMPA, kNMDA*wEnsInhNMDA, kGABA*wInhFdfw, kGABA*wInhEns, fAMPA, fNMDA, fGABA, N=N, stim=stim, t=t, dt=dt)
 aFdfw = fNMDA.filt(data['fdfw'])
 target = fNMDA.filt(data['inpt'])
 xhatFF = np.dot(aFdfw, dFFNMDA)
@@ -260,7 +237,7 @@ ax.plot(data['times'], target, linestyle="--", label='input')
 ax.plot(data['times'], xhatFF, alpha=0.5, label='fdfw')
 ax.plot(data['times'], targetIntg, linestyle="--", label='integral')
 ax.plot(data['times'], xhatIntg, alpha=0.5, label='ens')
-# ax.plot(data['times'], data['inhState'], alpha=0.5, label='inh')
+ax.plot(data['times'], data['inhState'], alpha=0.5, label='inh')
 ax.legend()
 ax.set(xlabel="time (s)", ylabel=r"$\mathbf{\hat{x}}(t)$")
-fig.savefig("plots/gatedMemory_goLIF_lowDA.pdf")
+fig.savefig("plots/gatedMemory_goLIF_inh_lowDA.pdf")

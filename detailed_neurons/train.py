@@ -234,52 +234,6 @@ def dh_lstsq(stim_data, target_data, spk_data,
             lambda_d *= 1.25
 
     return d_new, h_new
-
-class LearningNode(nengo.Node):
-    def __init__(self, N, N_pre, dim, conn, k=1e-5, w_max=2e-4, decay=lambda t: 1, seed=0):
-        self.N = N
-        self.N_pre = N_pre
-        self.dim = dim
-        self.conn = conn
-        self.w_max = w_max
-        self.size_in = 2*N+N_pre+dim
-        self.size_out = 0
-        self.k = k
-        self.decay = decay
-        self.rng = np.random.RandomState(seed=seed)
-        super(LearningNode, self).__init__(
-            self.step, size_in=self.size_in, size_out=self.size_out)
-
-    def step(self, t, x):
-        a_pre = x[:self.N_pre]
-        a_bio = x[self.N_pre: self.N_pre+self.N]
-        a_supv = x[self.N_pre+self.N:]
-        u = x[-self.dim:]
-        pre = self.rng.randint(0, self.conn.weights.shape[0])
-#         print(np.sum(self.conn.e))
-        for post in range(self.conn.weights.shape[1]):
-            delta_a = a_bio[post] - a_supv[post]
-            # if a_bio[post] == 0 or a_supv[post] == 0:
-            #     delta_a *= 2
-            for dim in range(self.conn.d.shape[1]):
-                dim_scale = 1 if np.sum(np.abs(u)) == 0 else np.abs(u[dim])/np.sum(np.abs(u))
-                if self.conn.d[pre, dim] >= 0:
-                    delta_e = -self.k * a_pre[pre] * dim_scale * self.decay(t)
-                if self.conn.d[pre, dim] < 0:
-                    delta_e = self.k * a_pre[pre] * dim_scale * self.decay(t)
-                self.conn.e[pre, post, dim] += delta_a * delta_e
-            self.conn.weights[pre, post] = np.dot(self.conn.d[pre], self.conn.e[pre, post])
-            if self.conn.weights[pre, post] > self.w_max:
-                self.conn.weights[pre, post] = self.w_max
-                self.conn.e[pre, post] *= 0.8
-            if self.conn.weights[pre, post] < -self.w_max:
-                self.conn.weights[pre, post] = -self.w_max
-                self.conn.e[pre, post] *= 0.8
-#                 self.conn.weights[pre, post] += delta_a * -self.k * a_pre[pre]
-            self.conn.netcons[pre, post].weight[0] = np.abs(self.conn.weights[pre, post])
-            # print(np.abs(self.conn.weights[pre, post]))
-            self.conn.netcons[pre, post].syn().e = 0.0 if self.conn.weights[pre, post] > 0 else -70.0
-        return
     
     
 class LearningNode2(nengo.Node):
@@ -367,9 +321,9 @@ class WNode(nengo.Node):
             if np.any(np.isnan(volts)): # no weight update if voltage is nan
                 continue
             else:
-                condition1 = a_bio[post] > 50
-                condition2 = len(np.where((volts > -40) & (volts < 5))[0]) == self.check             
-                if condition1 or condition2: # check for oversaturation
+#                 condition1 = a_bio[post] > 50
+                condition2 = len(np.where((volts > -40) & (volts < 5))[0]) == self.check
+                if condition2: # check for oversaturation
                     for pp in range(self.nPre): self.conn.e[pp, post] *= 0.9
                     continue
             delta_a = a_bio[post] - a_supv[post]
@@ -384,89 +338,3 @@ class WNode(nengo.Node):
             self.conn.netcons[pre, post].weight[0] = np.abs(w)
             self.conn.netcons[pre, post].syn().e = 0.0 if w > 0 else -70.0
         return
-    
-def mixedLstSq(aExc, aInh, target, dt=0.001, dMin=-1e-3, dMax=1e-3, evals=100, seed=0):
-    def objective(hyperparams):
-        aExc = np.load('data/mixedLstSq.npz')['aExc']
-        aInh = np.load('data/mixedLstSq.npz')['aInh']
-        target = np.load('data/mixedLstSq.npz')['target']
-        dExc = [hyperparams["exc"+str(n)] for n in range(aExc.shape[1])]
-        dInh = [hyperparams["inh"+str(n)] for n in range(aInh.shape[1])]
-        d = np.hstack((dExc, dInh)).T
-        A = np.hstack((aExc, aInh))
-#         print(d.shape)
-#         print(A.shape)
-        xhat = np.dot(A, d)
-        loss = rmse(xhat, target)
-        result = {'loss': loss, 'status': STATUS_OK}
-        for i in range(d.shape[0]):
-            result[i] = d[i]
-        return result
-    np.savez_compressed('data/mixedLstSq.npz', aExc=aExc, aInh=aInh, target=target)
-    hyperparams = {}
-    hyperparams['dt'] = dt
-    for n in range(aExc.shape[1]):
-        hyperparams["exc"+str(n)] = hp.uniform("exc"+str(n), 0, dMax)
-    for n in range(aInh.shape[1]):
-        hyperparams["inh"+str(n)] = hp.uniform("inh"+str(n), dMin, 0)
-    trials = Trials()
-    fmin(objective,
-        rstate=np.random.RandomState(seed=seed),
-        space=hyperparams,
-        algo=tpe.suggest,
-        max_evals=evals,
-        trials=trials)
-    best_idx = np.argmin(trials.losses())
-    best = trials.trials[best_idx]
-#     taus_ens = best['result']['taus_ens']
-#     d_ens = best['result']['d_ens']
-#     h_ens = DoubleExp(taus_ens[0], taus_ens[1])
-    dExc = np.array([best['result'][i] for i in range(aExc.shape[1])])
-    dInh = np.array([best['result'][aExc.shape[1]+i] for i in range(aExc.shape[1])])
-    return dExc, dInh
-  
-    
-# # Calculate Lyapunov Exponent
-# start = int(t_lyaps[0]/dt_sample)
-# end = int(t_lyaps[1]/dt_sample)
-# one_time = np.arange(0, t, dt)[start:end]
-# times = np.zeros((n_trains, one_time.shape[0]))
-# delta_tars = np.zeros((n_trains, one_time.shape[0]))
-# delta_enss = np.zeros((n_trains, one_time.shape[0]))
-# for ntrn in range(n_trains):
-#     tar1 = f.filt(targets[ntrn-1], dt=dt_sample)[start:end]
-#     tar2 = f.filt(targets[ntrn], dt=dt_sample)[start:end]
-# #             tar1 = gaussian_filter1d(targets[ntrn-1], sigma=smooth, axis=0)[start:end]
-# #             tar2 = gaussian_filter1d(targets[ntrn], sigma=smooth, axis=0)[start:end]
-#     a_ens1 = f_ens.filt(spikes[ntrn-1], dt=dt_sample)[start:end]
-#     a_ens2 = f_ens.filt(spikes[ntrn], dt=dt_sample)[start:end]
-#     ens1 = np.dot(a_ens1, d_ens)
-#     ens2 = np.dot(a_ens2, d_ens)
-#     times[ntrn] = one_time
-#     delta_tars[ntrn] = np.sqrt(
-#         np.square(np.abs(tar1[:,0]-tar2[:,0])) + 
-#         np.square(np.abs(tar1[:,1]-tar2[:,1])) + 
-#         np.square(np.abs(tar1[:,2]-tar2[:,2])))
-#     delta_enss[ntrn] = np.sqrt(
-#         np.square(np.abs(ens1[:,0]-ens2[:,0])) + 
-#         np.square(np.abs(ens1[:,1]-ens2[:,1])) + 
-#         np.square(np.abs(ens1[:,2]-ens2[:,2])))
-# all_times = times.reshape(n_trains*one_time.shape[0])
-# delta_tar = delta_tars.reshape(n_trains*one_time.shape[0])
-# delta_ens = delta_enss.reshape(n_trains*one_time.shape[0])
-# slope_tar, intercept_tar, _, _, _ = linregress(all_times, np.log(delta_tar))
-# if np.all(delta_ens > 0):
-#     slope_ens, intercept_ens, _, _, _ = linregress(all_times, np.log(delta_ens))
-#     error = np.abs(slope_ens - slope_tar) / slope_tar
-# else:
-#     print('trajectory pair %s, %s have identical points'%(ntrn-1, ntrn))
-#     error = np.inf
-# fig, ax = plt.subplots()
-# ax.scatter(all_times, np.log(delta_tar), s=0.3, color='r', label='target')
-# ax.plot(one_time, slope_tar*one_time+intercept_tar, color='r', linestyle="--", label='target fit, slope=%.4f'%slope_tar)
-# if np.all(delta_ens > 0):
-#     ax.scatter(all_times, np.log(delta_ens), s=0.3, color='b', label='ens')
-#     ax.plot(one_time, slope_ens*one_time+intercept_ens, color='b', linestyle="--", label='ens fit, slope=%.4f'%slope_ens)
-# ax.legend()
-# ax.set(xlabel='time', ylabel='log euclidian distance between trajectory pair', title='error=%.3f'%error)
-# fig.savefig("plots/lorenz_%s_train_lyapunov.pdf"%neuron_type)

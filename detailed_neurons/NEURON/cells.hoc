@@ -178,7 +178,6 @@ begintemplate Interneuron
 	create soma, dendrite
 
 	proc init() {
-		DA = 0
 		rGeo = $1
 		rCm = $2
 		rR = $3
@@ -186,8 +185,8 @@ begintemplate Interneuron
 		ki0_k_ion = 140   /* mM */	nseg=1
 
 		soma {
-			L=15.0
-			diam=15.0
+			L=15.0*rGeo
+			diam=15.0*rGeo
 			insert Naf_fs
 			gnafbar_Naf_fs = 0.100
 			insert kdr_fs
@@ -195,7 +194,7 @@ begintemplate Interneuron
 			insert kdyn
 			insert pas
 			cm = 1.0       /* microF/cm2 */
-			g_pas = (10.00-2.5*DA)*1e-5  /* mho/cm2 */
+			g_pas = 10.00*1e-5  /* mho/cm2 */
 			e_pas = -70
 			Ra = 150*rR         /* ohm-cm */
 		}
@@ -210,7 +209,7 @@ begintemplate Interneuron
 			insert kdyn
 			insert pas
 			cm = 1.0*rCm       /* microF/cm2 */
-			g_pas = (10.00-2.5*DA)*1e-5  /* mho/cm2 */
+			g_pas = 10.00*1e-5  /* mho/cm2 */
 			e_pas = -70
 			Ra = 150*rR         /* ohm-cm */
 		}

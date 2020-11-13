@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set(context='paper', style='whitegrid')
 
-def makeSignal(t, f, dt=0.001, value=1.0, nFilts=1, seed=0):
-    stim = nengo.processes.WhiteSignal(period=t/2, high=1.0, rms=0.5, seed=seed)
+def makeSignal(t, f, dt=0.001, value=1.0, nFilts=1, norm='x', freq=1.0, seed=0):
+    stim = nengo.processes.WhiteSignal(period=t/2, high=freq, rms=0.5, seed=seed)
     with nengo.Network() as model:
         u = nengo.Node(stim)
         pU = nengo.Probe(u, synapse=None)
@@ -22,13 +22,26 @@ def makeSignal(t, f, dt=0.001, value=1.0, nFilts=1, seed=0):
         sim.run(t/2, progress_bar=False)
     u = sim.data[pU]
     x = sim.data[pX]
-    for n in range(nFilts):
-        x = f.filt(x, dt=dt)
-    norm = value / np.max(np.abs(x))
+    if norm == 'x':
+        for n in range(nFilts):
+            x = f.filt(x, dt=dt)
+        norm = value / np.max(np.abs(x))
+    elif norm == 'u':
+        for n in range(nFilts):
+            u = f.filt(u, dt=dt)
+        norm = value / np.max(np.abs(u))
     mirrored = np.concatenate(([[0]], sim.data[pU]*norm, -sim.data[pU]*norm))
     return lambda t: mirrored[int(t/dt)]
 
-def go(NPre=100, N=100, t=10, m=Uniform(30, 30), i=Uniform(-0.8, 0.8), seed=0, dt=0.001, f=DoubleExp(1e-3, 1e-2), fS=DoubleExp(1e-3, 1e-1), neuron_type=LIF(), d1a=None, d1b=None, d2=None, f1a=None, f1b=None, f2=None, e1a=None, e1b=None, e2=None, l1a=False, l1b=False, l2=False, l3=False, test=False, stim=lambda t: np.sin(t)):
+def makeSin(t, f, dt=0.001, seed=0):
+    rng = np.random.RandomState(seed=seed)
+    mag = rng.uniform(0, 1.5)
+    phase = rng.uniform(0, 2*np.pi)
+    freq = rng.uniform(np.pi/t, 3*np.pi/t)
+    sin = lambda t: mag*np.sin(freq*t + phase)
+    return sin
+
+def go(NPre=100, N=100, t=10, m=Uniform(30, 30), i=Uniform(-0.8, 0.8), seed=0, dt=0.001, f=DoubleExp(1e-3, 1e-2), fS=DoubleExp(1e-3, 1e-1), neuron_type=LIF(), d1a=None, d1b=None, d2=None, f1a=None, f1b=None, f2=None, e1a=None, e1b=None, e2=None, l1a=False, l1b=False, l2=False, l3=False, test=False, stim=lambda t: np.sin(t), stim2=lambda t: 0):
 
     with nengo.Network(seed=seed) as model:
         inpt = nengo.Node(stim)
@@ -45,16 +58,21 @@ def go(NPre=100, N=100, t=10, m=Uniform(30, 30), i=Uniform(-0.8, 0.8), seed=0, d
         pPreInpt = nengo.Probe(preInpt.neurons, synapse=None)
         pPreIntg = nengo.Probe(preIntg.neurons, synapse=None)
         pEns = nengo.Probe(ens.neurons, synapse=None)
-        if l1a:  # preInpt-to-ens
-            tarEns = nengo.Ensemble(N, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)
-            nengo.Connection(preInpt, tarEns, synapse=f1a, solver=NoSolver(d1a), seed=seed)
-            learnEncoders(c1a, tarEns, fS)
-            pTarEns = nengo.Probe(tarEns.neurons, synapse=None)
-        if l1b:  # preIntg-to-ens, without preInpt
+        if l1b:  # preIntg-to-ens
             tarEns = nengo.Ensemble(N, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)
             nengo.Connection(preIntg, tarEns, synapse=f1b, solver=NoSolver(d1b), seed=seed+1)
             c1b = nengo.Connection(preIntg, ens, synapse=f1b, solver=NoSolver(d1b), seed=seed+1)
             learnEncoders(c1b, tarEns, fS)
+            pTarEns = nengo.Probe(tarEns.neurons, synapse=None)
+        if l1a:  # preInpt-to-ens, given preIntg-to-ens
+            inpt2 = nengo.Node(stim2)
+            tarEns = nengo.Ensemble(N, 1, max_rates=m, intercepts=i, neuron_type=nengo.LIF(), seed=seed)
+            nengo.Connection(preInpt, tarEns, synapse=f1a, solver=NoSolver(d1a), seed=seed)
+            c0b.transform = 0
+            nengo.Connection(inpt2, preIntg, synapse=None, seed=seed)
+            nengo.Connection(preIntg, tarEns, synapse=f1b, solver=NoSolver(d1b), seed=seed+1)
+            c1b = nengo.Connection(preIntg, ens, synapse=f1b, solver=NoSolver(d1b), seed=seed+1)
+            learnEncoders(c1a, tarEns, fS)
             pTarEns = nengo.Probe(tarEns.neurons, synapse=None)
         if l2: # ens readout, given preIntg and preInpt
             c1b = nengo.Connection(preIntg, ens, synapse=f1b, solver=NoSolver(d1b), seed=seed+1)
@@ -71,10 +89,10 @@ def go(NPre=100, N=100, t=10, m=Uniform(30, 30), i=Uniform(-0.8, 0.8), seed=0, d
 
     with nengo.Simulator(model, seed=seed, dt=dt, progress_bar=False) as sim:
         if isinstance(neuron_type, Bio):
+            if l1b:
+                setWeights(c1b, d1b, e1b)
             if l1a:
                 setWeights(c1a, d1a, e1a)
-            if l1b:
-#                 setWeights(c1a, d1a, e1a)
                 setWeights(c1b, d1b, e1b)
             if l2:
                 setWeights(c1a, d1a, e1a)
@@ -113,7 +131,7 @@ def go(NPre=100, N=100, t=10, m=Uniform(30, 30), i=Uniform(-0.8, 0.8), seed=0, d
 
 
 def run(NPre=100, N=100, t=10, nTrain=10, nTest=30, nEnc=10, neuron_type=LIF(),
-        dt=0.001, f=DoubleExp(1e-3, 1e-1), fS=DoubleExp(1e-3, 1e-1), Tff=0.1, Tfb=1.0, reg=1e-3, tauRiseMax=5e-2, load=False, file=None):
+        dt=0.001, f=DoubleExp(1e-3, 1e-1), fS=DoubleExp(1e-3, 1e-1), Tff=0.1, Tfb=1.0, reg=1e-3, tauRiseMax=5e-2, tauFallMax=3e-1, load=False, file=None):
 
     print('\nNeuron Type: %s'%neuron_type)
     if load:
@@ -138,8 +156,8 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=30, nEnc=10, neuron_type=LIF(),
             spikesIntg[n] = data['preIntg']
             targetsInpt[n] = f.filt(Tff*data['inpt'], dt=0.001)
             targetsIntg[n] = f.filt(data['intg'], dt=0.001)
-        d1a, f1a, tauRise1a, tauFall1a, X1a, Y1a, error1a = decode(spikesInpt, targetsInpt, nTrain, dt=0.001, reg=reg, name="integrateNew", tauRiseMax=tauRiseMax)
-        d1b, f1b, tauRise1b, tauFall1b, X1b, Y1b, error1b = decode(spikesIntg, targetsIntg, nTrain, dt=0.001, reg=reg, name="integrateNew", tauRiseMax=tauRiseMax)
+        d1a, f1a, tauRise1a, tauFall1a, X1a, Y1a, error1a = decode(spikesInpt, targetsInpt, nTrain, dt=0.001, reg=reg, name="integrateNew", tauRiseMax=tauRiseMax, tauFallMax=tauFallMax)
+        d1b, f1b, tauRise1b, tauFall1b, X1b, Y1b, error1b = decode(spikesIntg, targetsIntg, nTrain, dt=0.001, reg=reg, name="integrateNew", tauRiseMax=tauRiseMax, tauFallMax=tauFallMax)
         np.savez("data/integrateNew_%s.npz"%neuron_type, d1a=d1a, d1b=d1b, tauRise1a=tauRise1a, tauRise1b=tauRise1b, tauFall1a=tauFall1a, tauFall1b=tauFall1b)
         times = np.arange(0, t*nTrain, 0.001)
         plotState(times, X1a, Y1a, error1a, "integrateNew", "%s_preInpt"%neuron_type, t*nTrain)
@@ -149,21 +167,24 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=30, nEnc=10, neuron_type=LIF(),
         e1a = np.load(file)['e1a']
         e1b = np.load(file)['e1b']
     elif isinstance(neuron_type, Bio):
-        print("encoders for preInpt-to-ens")
         e1a = np.zeros((NPre, N, 1))
         e1b = np.zeros((NPre, N, 1))
-        for n in range(nEnc):
-            stim = makeSignal(t, f, dt=dt, seed=n)
-            data = go(d1a=d1a, d1b=d1b, e1a=e1a, e1b=e1b, f1a=f1a, f1b=f1b, NPre=NPre, N=N, t=t, dt=dt, f=f, fS=fS, neuron_type=neuron_type, stim=stim, l1a=True)
-            e1a = data['e1a']
-            plotActivity(t, dt, fS, data['times'], data['ens'], data['tarEns'], "integrateNew", "preInptToEns")
-            np.savez("data/integrateNew_%s.npz"%neuron_type, d1a=d1a, d1b=d1b, tauRise1a=tauRise1a, tauRise1b=tauRise1b, tauFall1a=tauFall1a, tauFall1b=tauFall1b, e1a=e1a, e1b=e1b)
         print("encoders for preIntg-to-ens")
         for n in range(nEnc):
             stim = makeSignal(t, f, dt=dt, seed=n)
             data = go(d1a=d1a, d1b=d1b, e1a=e1a, e1b=e1b, f1a=f1a, f1b=f1b, NPre=NPre, N=N, t=t, dt=dt, f=f, fS=fS, neuron_type=neuron_type, stim=stim, l1b=True)
             e1b = data['e1b']
             plotActivity(t, dt, fS, data['times'], data['ens'], data['tarEns'], "integrateNew", "preIntgToEns")
+            np.savez("data/integrateNew_%s.npz"%neuron_type, d1a=d1a, d1b=d1b, tauRise1a=tauRise1a, tauRise1b=tauRise1b, tauFall1a=tauFall1a, tauFall1b=tauFall1b, e1a=e1a, e1b=e1b)
+        print("encoders for preInpt-to-ens")
+        for n in range(nEnc):
+            stim = makeSignal(t, f, dt=dt, seed=n)
+            # stim2 = makeSignal(t, f, dt=dt, seed=n, value=0.5)
+#             stim2 = makeSignal(t, f, dt=dt, norm='u', freq=0.25, value=0.8, seed=100+n)
+            stim2 = makeSin(t, f, dt=dt, seed=n)
+            data = go(d1a=d1a, d1b=d1b, e1a=e1a, e1b=e1b, f1a=f1a, f1b=f1b, NPre=NPre, N=N, t=t, dt=dt, f=f, fS=fS, neuron_type=neuron_type, stim=stim, l1a=True, stim2=stim2)
+            e1a = data['e1a']
+            plotActivity(t, dt, fS, data['times'], data['ens'], data['tarEns'], "integrateNew", "preInptToEns")
             np.savez("data/integrateNew_%s.npz"%neuron_type, d1a=d1a, d1b=d1b, tauRise1a=tauRise1a, tauRise1b=tauRise1b, tauFall1a=tauFall1a, tauFall1b=tauFall1b, e1a=e1a, e1b=e1b)
     else:
         e1a = np.zeros((NPre, N, 1))
@@ -183,7 +204,7 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=30, nEnc=10, neuron_type=LIF(),
             data = go(d1a=d1a, d1b=d1b, e1a=e1a, e1b=e1b, f1a=f1a, f1b=f1b, NPre=NPre, N=N, t=t, dt=dt, f=f, fS=fS, neuron_type=neuron_type, stim=stim, l2=True)
             spikes[n] = data['ens']
             targets[n] = f.filt(Tfb*data['intg'], dt=dt)
-        d2, f2, tauRise2, tauFall2, X, Y, error = decode(spikes, targets, nTrain, dt=dt, reg=reg, tauRiseMax=tauRiseMax, name="integrateNew")
+        d2, f2, tauRise2, tauFall2, X, Y, error = decode(spikes, targets, nTrain, dt=dt, reg=reg, tauRiseMax=tauRiseMax, tauFallMax=tauFallMax, name="integrateNew")
         np.savez("data/integrateNew_%s.npz"%neuron_type, d1a=d1a, d1b=d1b, tauRise1a=tauRise1a, tauRise1b=tauRise1b, tauFall1a=tauFall1a, tauFall1b=tauFall1b, e1a=e1a, e1b=e1b, d2=d2, tauRise2=tauRise2, tauFall2=tauFall2)
         times = np.arange(0, t*nTrain, dt)
         plotState(times, X, Y, error, "integrateNew", "%s_ens"%neuron_type, t*nTrain)
@@ -195,6 +216,7 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=30, nEnc=10, neuron_type=LIF(),
         e2 = np.zeros((N, N, 1))
         for n in range(nEnc):
             stim = makeSignal(t, f, dt=dt, seed=n)
+            #stim = makeSin(t, f, dt=dt, seed=n)
             data = go(d1a=d1a, d1b=d1b, d2=d2, e1a=e1a, e1b=e1b, e2=e2, f1a=f1a, f1b=f1b, f2=f2, NPre=NPre, N=N, t=t, dt=dt, f=f, fS=fS, neuron_type=neuron_type, stim=stim, l3=True)
             e2 = data['e2']
             plotActivity(t, dt, fS, data['times'], data['ens'], data['tarEns2'], "integrateNew", "Ens2Ens")
@@ -215,12 +237,12 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=30, nEnc=10, neuron_type=LIF(),
         errorU = rmse(X, U)
         errors[test] = error
         plotState(data['times'], X, Y, error, "integrateNew", "%s_test%s"%(neuron_type, test), t)
-        plotState(data['times'], X, U, errorU, "integrateNew", "%s_inpt%s"%(neuron_type, test), t)
+        #plotState(data['times'], X, U, errorU, "integrateNew", "%s_inpt%s"%(neuron_type, test), t)
     print('%s errors:'%neuron_type, errors)
     np.savez("data/integrateNew_%s.npz"%neuron_type, d1a=d1a, d1b=d1b, tauRise1a=tauRise1a, tauRise1b=tauRise1b, tauFall1a=tauFall1a, tauFall1b=tauFall1b, e1a=e1a, e1b=e1b, d2=d2, tauRise2=tauRise2, tauFall2=tauFall2, e2=e2, errors=errors)
     return errors
 
-# errorsLIF = run(neuron_type=LIF(), load=False, file="data/integrateNew_LIF().npz")
-# errorsALIF = run(neuron_type=ALIF(), load=False, file="data/integrateNew_ALIF().npz")
+#errorsLIF = run(neuron_type=LIF(), load=False, file="data/integrateNew_LIF().npz")
+#errorsALIF = run(neuron_type=ALIF(), load=False, file="data/integrateNew_ALIF().npz")
 #errorsWilson = run(neuron_type=Wilson(), dt=1e-4, load=False, file="data/integrateNew_Wilson().npz")
-errorsBio = run(neuron_type=Bio("Pyramidal"), N=30, Tff=0.3, reg=1e-1, nEnc=10, nTest=10, load=False, file="data/integrateNew_Bio().npz")
+errorsBio = run(neuron_type=Bio("Pyramidal"), Tff=0.3, reg=1e-1, load=False, file="data/integrateNew_Bio().npz")

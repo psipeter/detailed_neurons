@@ -140,7 +140,7 @@ def go(NPre=100, N=100, t=10, c=None, seed=0, dt=0.001, Tff=0.3, tTrans=0.01,
             c5 = nengo.Connection(preC, inh, synapse=fPre, solver=NoSolver(dPreC), seed=seed)
             c6 = nengo.Connection(inh, fdfw4, synapse=GABA(), solver=NoSolver(dInh), seed=seed)
             learnEncoders(c2, fdfw3, fS, alpha=alpha, eMax=eMax, tTrans=tTrans)
-            learnEncoders(c6, tarFdfw4, fS, alpha=1e4*alpha, eMax=1e4*eMax, tTrans=tTrans)
+            learnEncoders(c6, tarFdfw4, fS, alpha=1e3*alpha, eMax=1e3*eMax, tTrans=tTrans, inh=True)
             pFdfw2 = nengo.Probe(fdfw2.neurons, synapse=None)
             pFdfw4 = nengo.Probe(fdfw4.neurons, synapse=None)
             pTarFdfw2 = nengo.Probe(fdfw3.neurons, synapse=None)
@@ -168,7 +168,7 @@ def go(NPre=100, N=100, t=10, c=None, seed=0, dt=0.001, Tff=0.3, tTrans=0.01,
         if stage==4:
             setWeights(c1, dPreA, ePreA)
             setWeights(c2, dPreB, ePreB)
-            setWeights(c3, dFdfw, eFdfw)            
+            setWeights(c3, dFdfw, eFdfw)
         if stage==5:
             setWeights(c1, dPreA, ePreA)
             setWeights(c2, dFdfw, eFdfw)
@@ -190,6 +190,7 @@ def go(NPre=100, N=100, t=10, c=None, seed=0, dt=0.001, Tff=0.3, tTrans=0.01,
             setWeights(c4, dNeg, eNeg)
             setWeights(c5, dPreC, ePreC)
             setWeights(c6, dInh, eInh)
+            # setWeights(c6, -np.ones((N, 1)), np.ones((N, N)))
         neuron.h.init()
         sim.run(t, progress_bar=True)
         reset_neuron(sim, model) 
@@ -310,7 +311,7 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=3, nEnc=10, dt=0.001, c=None,
             stimC = lambda x: 0.5+0.5*np.sin(2*np.pi*x/t)
             data = go(
                 NPre=NPre, N=N, t=t, dt=dt,
-                stimA=stimA, stimB=stimB, stimC=stimB, 
+                stimA=stimA, stimB=stimB, stimC=stimC, 
                 dPreA=dPreA, dPreB=dPreB, dPreC=dPreC,
                 ePreA=ePreA, ePreB=ePreB, ePreC=ePreC,
                 stage=2)
@@ -417,7 +418,6 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=3, nEnc=10, dt=0.001, c=None,
     # eNeg = None
     # eInh = None
 
-
     print("testing")
     vals = np.linspace(-1, 1, nTest)
     for test in range(nTest):
@@ -426,7 +426,7 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=3, nEnc=10, dt=0.001, c=None,
         stimC = lambda t: 0 if t<c else 1
         data = go(
             NPre=NPre, N=N, t=t, dt=dt, stimA=stimA, stimC=stimC,
-            dPreA=dPreA, dPreC=dPreC, dFdfw=dFdfw, dBio=dBio, dNeg=Tneg*dNeg, dInh=None,
+            dPreA=dPreA, dPreC=dPreC, dFdfw=dFdfw, dBio=dBio, dNeg=Tneg*dNeg, dInh=dInh,
             ePreA=ePreA, ePreC=ePreC, eFdfw=eFdfw, eBio=eBio, eNeg=eNeg, eInh=eInh,
             stage=7, c=c, DA=DATest)
         aFdfw = fNMDA.filt(data['fdfw'], dt=dt)
@@ -479,4 +479,4 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=3, nEnc=10, dt=0.001, c=None,
         # dFdfw=dFdfw, eFdfw=eFdfw, dBio=dBio, dNeg=dNeg, eBio=eBio, eNeg=eNeg, eInh=eInh)
 
 run(N=30, c=5, nTrain=3, nEnc=10, Tneg=-0.5, 
-    load=[], file="data/integrateNMDA.npz")
+    load=[0,1,2,3,4,5,6], file="data/integrateNMDA.npz")

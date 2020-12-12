@@ -12,9 +12,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set(context='paper', style='whitegrid')
 
-def makeSignal(t, fPre, fNMDA, dt=0.001, value=1.0, freq=1.0, norm='x', seed=0, c=None):
+def makeSignal(t, fPre, fNMDA, dt=0.001, value=1.0, norm='x', seed=0, c=None):
     if not c: c = t
-    stim = nengo.processes.WhiteSignal(period=t/2, high=freq, rms=0.5, seed=seed)
+    stim = nengo.processes.WhiteSignal(period=t/2, high=0.5, rms=0.5, seed=seed)
     with nengo.Network() as model:
         u = nengo.Node(stim)
         pU = nengo.Probe(u, synapse=None)
@@ -33,19 +33,6 @@ def makeSignal(t, fPre, fNMDA, dt=0.001, value=1.0, freq=1.0, norm='x', seed=0, 
     funcX = lambda t: mirroredX[int(t/dt)] if t<c else mirroredX[int(c/dt)]
     return funcU, funcX
 
-def makeSin(t, dt=0.001, seed=0, value=1.0):
-    rng = np.random.RandomState(seed=seed)
-    phase = rng.uniform(0, 2*np.pi)
-    mag = value
-    freq = 2*np.pi/t
-    sin = lambda t: mag*np.sin(freq*t + phase)
-    return sin
-
-def makeFlat(t, dt=0.001, seed=0):
-    idx = seed % 3
-    vals = [-0.8, 0, 0.8]
-    flat = lambda t: vals[idx]
-    return flat
 
 def go(NPre=100, N=100, t=10, c=None, seed=0, dt=0.001, Tff=0.3, tTrans=0.01,
         stage=None, alpha=3e-7, eMax=1e-1,
@@ -59,13 +46,13 @@ def go(NPre=100, N=100, t=10, c=None, seed=0, dt=0.001, Tff=0.3, tTrans=0.01,
         inptA = nengo.Node(stimA)
         inptB = nengo.Node(stimB)
         inptC = nengo.Node(stimC)
-        preA = nengo.Ensemble(NPre, 1, max_rates=Uniform(20, 40), radius=2, seed=seed)
-        preB = nengo.Ensemble(NPre, 1, max_rates=Uniform(20, 40), seed=seed)
-        preC = nengo.Ensemble(NPre, 1, max_rates=Uniform(20, 40), seed=seed)
+        preA = nengo.Ensemble(NPre, 1, max_rates=Uniform(30, 30), seed=seed)
+        preB = nengo.Ensemble(NPre, 1, max_rates=Uniform(30, 30), seed=seed)
+        preC = nengo.Ensemble(NPre, 1, max_rates=Uniform(30, 30), seed=seed)
         fdfw = nengo.Ensemble(N, 1, neuron_type=Bio("Pyramidal", DA=DA), seed=seed)
         ens = nengo.Ensemble(N, 1, neuron_type=Bio("Pyramidal", DA=DA), seed=seed+1)
         inh = nengo.Ensemble(N, 1, neuron_type=Bio("Interneuron", DA=DA), seed=seed+2)
-        tarFdfw = nengo.Ensemble(N, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, 0.8), radius=2, neuron_type=nengo.LIF(), seed=seed)
+        tarFdfw = nengo.Ensemble(N, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, 0.8), neuron_type=nengo.LIF(), seed=seed)
         tarEns = nengo.Ensemble(N, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, 0.8), neuron_type=nengo.LIF(), seed=seed+1)
         tarInh = nengo.Ensemble(N, 1, max_rates=Uniform(30, 30), intercepts=Uniform(0.2, 0.8), encoders=Choice([[1]]), neuron_type=nengo.LIF(), seed=seed+2)
         cA = nengo.Connection(inptA, preA, synapse=None, seed=seed)
@@ -111,7 +98,7 @@ def go(NPre=100, N=100, t=10, c=None, seed=0, dt=0.001, Tff=0.3, tTrans=0.01,
             c2 = nengo.Connection(preB, ens, synapse=fPre, solver=NoSolver(dPreB), seed=seed)
             c3 = nengo.Connection(fdfw, ens, synapse=NMDA(), solver=NoSolver(dFdfw), seed=seed)
         if stage==5:
-            preB2 = nengo.Ensemble(NPre, 1, max_rates=Uniform(20, 40), seed=seed)
+            preB2 = nengo.Ensemble(NPre, 1, max_rates=Uniform(30, 30), seed=seed)
             ens2 = nengo.Ensemble(N, 1, neuron_type=Bio("Pyramidal", DA=DA), seed=seed+1)
             ens3 = nengo.Ensemble(N, 1, neuron_type=Bio("Pyramidal", DA=DA), seed=seed+1)
             nengo.Connection(inptB, preB2, synapse=fNMDA, seed=seed)
@@ -124,11 +111,11 @@ def go(NPre=100, N=100, t=10, c=None, seed=0, dt=0.001, Tff=0.3, tTrans=0.01,
             learnEncoders(c4, ens3, fS, alpha=alpha, eMax=eMax, tTrans=tTrans)
             pTarEns = nengo.Probe(ens3.neurons, synapse=None)
         if stage==6:
-            preA2 = nengo.Ensemble(NPre, 1, radius=2, max_rates=Uniform(20, 40), seed=seed)
+            preA2 = nengo.Ensemble(NPre, 1, max_rates=Uniform(30, 30), seed=seed)
             fdfw2 = nengo.Ensemble(N, 1, neuron_type=Bio("Pyramidal", DA=DA), seed=seed)
             fdfw3 = nengo.Ensemble(N, 1, neuron_type=Bio("Pyramidal", DA=DA), seed=seed)
             fdfw4 = nengo.Ensemble(N, 1, neuron_type=Bio("Pyramidal", DA=DA), seed=seed)
-            tarFdfw4 = nengo.Ensemble(N, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, 0.8), radius=2, neuron_type=nengo.LIF(), seed=seed)
+            tarFdfw4 = nengo.Ensemble(N, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, 0.8), neuron_type=nengo.LIF(), seed=seed)
             nengo.Connection(inptA, tarFdfw4, synapse=fPre, seed=seed)
             nengo.Connection(inptB, preA2, synapse=fNMDA, seed=seed)
             nengo.Connection(inptC, tarInh, synapse=fPre, seed=seed)
@@ -190,7 +177,6 @@ def go(NPre=100, N=100, t=10, c=None, seed=0, dt=0.001, Tff=0.3, tTrans=0.01,
             setWeights(c4, dNeg, eNeg)
             setWeights(c5, dPreC, ePreC)
             setWeights(c6, dInh, eInh)
-            # setWeights(c6, -np.ones((N, 1)), np.ones((N, N)))
         neuron.h.init()
         sim.run(t, progress_bar=True)
         reset_neuron(sim, model) 
@@ -478,5 +464,4 @@ def run(NPre=100, N=100, t=10, nTrain=10, nTest=3, nEnc=10, dt=0.001, c=None,
     # np.savez("data/integrateNMDA.npz", dPreA=dPreA, dPreB=dPreB, ePreA=ePreA, ePreB=ePreB,
         # dFdfw=dFdfw, eFdfw=eFdfw, dBio=dBio, dNeg=dNeg, eBio=eBio, eNeg=eNeg, eInh=eInh)
 
-run(N=30, c=5, nTrain=3, nEnc=10, Tneg=-0.5, 
-    load=[0,1,2,3,4,5,6], file="data/integrateNMDA.npz")
+run(N=30, t=20, c=10, nTrain=5, nEnc=5, Tneg=-1.0, load=[], file="data/integrateNMDA.npz")

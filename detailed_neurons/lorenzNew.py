@@ -54,7 +54,7 @@ def go(N=2000, d=None, f=None, t=100, l=False, neuron_type=LIF(),
         tar=sim.data[pTar],
         ens=sim.data[pEns])
 
-def run(N=3000, neuron_type=LIF(), tTrain=100, tTest=100, tTransTrain=20, tTransTest=20,
+def run(N=3000, neuron_type=LIF(), tTrain=200, tTest=100, tTransTrain=20, tTransTest=20,
     nTrain=1, nTest=10, dt=0.001, dtSampleTrain=0.003, dtSampleTest=0.01, seed=0,
     f2=10, reg=1e-3, reg2=1e-3, evals=30, r=30, load=False, file=None,
     tauRiseMin=1e-2, tauRiseMax=3e-2, tauFallMin=1e-1, tauFallMax=3e-1):

@@ -56,8 +56,8 @@ def go(N=2000, d=None, f=None, t=100, l=False, neuron_type=LIF(),
 
 def run(N=3000, neuron_type=LIF(), tTrain=200, tTest=100, tTransTrain=20, tTransTest=20,
     nTrain=1, nTest=10, dt=0.001, dtSampleTrain=0.003, dtSampleTest=0.01, seed=0,
-    f2=10, reg=1e-3, reg2=1e-3, evals=30, r=30, load=False, file=None,
-    tauRiseMin=1e-2, tauRiseMax=3e-2, tauFallMin=1e-1, tauFallMax=3e-1):
+    f2=10, reg=1e-3, reg2=1e-3, evals=100, r=30, load=False, file=None,
+    tauRiseMin=3e-2, tauRiseMax=6e-2, tauFallMin=2e-1, tauFallMax=3e-1):
 
     print('\nNeuron Type: %s'%neuron_type)
     rng = np.random.RandomState(seed=seed)
@@ -77,7 +77,8 @@ def run(N=3000, neuron_type=LIF(), tTrain=200, tTest=100, tTransTrain=20, tTrans
         targets = np.zeros((nTrain, timeStepsTrain, 3))
         targets2 = np.zeros((nTrain, timeStepsTrain, 3))
         for n in range(nTrain):
-            IC = np.array([rng.uniform(-15, 15), rng.uniform(-20, 20), rng.uniform(10, 35)])
+            # IC = np.array([rng.uniform(-15, 15), rng.uniform(-20, 20), rng.uniform(10, 35)])
+            IC = np.array([rng.uniform(-5, 5), rng.uniform(-5, 5), rng.uniform(20, 25)])
             data = go(N=N, neuron_type=neuron_type, l=True, t=tTrain, r=r, dt=dt, dtSample=dtSampleTrain, seed=seed, IC=IC)
             spikes[n] = data['ens'][-timeStepsTrain:]
             spikes2[n] = gaussian_filter1d(data['ens'], sigma=f2, axis=0)[-timeStepsTrain:]
@@ -100,7 +101,8 @@ def run(N=3000, neuron_type=LIF(), tTrain=200, tTest=100, tTransTrain=20, tTrans
     errors = np.zeros((nTest))
     rng = np.random.RandomState(seed=100+seed)
     for test in range(nTest):
-        IC = np.array([rng.uniform(-15, 15), rng.uniform(-20, 20), rng.uniform(10, 35)])
+        # IC = np.array([rng.uniform(-15, 15), rng.uniform(-20, 20), rng.uniform(10, 35)])
+        IC = np.array([rng.uniform(-5, 5), rng.uniform(-5, 5), rng.uniform(20, 25)])
         data = go(d=d, f=f, N=N, neuron_type=neuron_type, t=tTest, r=r, dt=dt, dtSample=dtSampleTest, seed=seed, IC=IC)
         A = f.filt(data['ens'], dt=dtSampleTest)
         A2 = gaussian_filter1d(data['ens'], sigma=f2, axis=0)[tStart:]

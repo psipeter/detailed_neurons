@@ -62,7 +62,7 @@ def go(NPre=300, NBias=100, N=30, t=10, seed=1, dt=0.001, Tff=0.3, tTrans=0.01,
         fPre=DoubleExp(1e-3, 1e-1), fNMDA=DoubleExp(10.6e-3, 285e-3), fGABA=DoubleExp(0.5e-3, 1.5e-3), fS=DoubleExp(1e-3, 1e-1),
         dPre=None, dFdfw=None, dEns=None, dBias=None,
         ePreFdfw=None, ePreEns=None, ePreBias=None, eFdfwEns=None, eBiasEns=None, eEnsEns=None, 
-        stimA=lambda t: 0, stimB=lambda t: 0, stimC=lambda t: 0.1, DA=lambda t: 1):
+        stimA=lambda t: 0, stimB=lambda t: 0, stimC=lambda t: 0.01, DA=lambda t: 0):
 
     with nengo.Network(seed=seed) as model:
         inptA = nengo.Node(stimA)
@@ -76,7 +76,7 @@ def go(NPre=300, NBias=100, N=30, t=10, seed=1, dt=0.001, Tff=0.3, tTrans=0.01,
         bias = nengo.Ensemble(NBias, 1, neuron_type=Bio("Interneuron", DA=DA), seed=seed+2)
         tarFdfw = nengo.Ensemble(N, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, 0.8), seed=seed)
         tarEns = nengo.Ensemble(N, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, 0.8), seed=seed+1)
-        tarBias = nengo.Ensemble(NBias, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, 0), encoders=Choice([[1]]), seed=seed+2)
+        tarBias = nengo.Ensemble(NBias, 1, max_rates=Uniform(30, 30), intercepts=Uniform(-0.8, -0.2), encoders=Choice([[1]]), seed=seed+2)
         cA = nengo.Connection(inptA, preA, synapse=None, seed=seed)
         cB = nengo.Connection(inptB, preB, synapse=None, seed=seed)
         cC = nengo.Connection(inptC, preC, synapse=None, seed=seed)
@@ -117,7 +117,7 @@ def go(NPre=300, NBias=100, N=30, t=10, seed=1, dt=0.001, Tff=0.3, tTrans=0.01,
             c1 = nengo.Connection(preC, bias, synapse=fPre, solver=NoSolver(dPre), seed=seed)
             c2 = nengo.Connection(bias, ens, synapse=GABA(), solver=NoSolver(dBias), seed=seed)
             c3 = nengo.Connection(preB, ens, synapse=fPre, solver=NoSolver(dPre), seed=seed)
-            learnEncoders(c3, tarEns, fS, alpha=10*alpha, eMax=10*eMax, tTrans=tTrans)
+            learnEncoders(c3, tarEns, fS, alpha=3*alpha, eMax=3*eMax, tTrans=tTrans)
         if stage==5:  # encoders for [fdfw] to ens
             cB.synapse = fNMDA
             tarPreA = nengo.Ensemble(1, 1, neuron_type=nengo.Direct())
@@ -244,7 +244,7 @@ def go(NPre=300, NBias=100, N=30, t=10, seed=1, dt=0.001, Tff=0.3, tTrans=0.01,
     )
 
 
-def run(NPre=100, NBias=100, N=30, t=10, nTrain=10, nTest=5, nEnc=10, dt=0.001,
+def run(NPre=300, NBias=100, N=30, t=10, nTrain=10, nTest=5, nEnc=10, dt=0.001,
         fPre=DoubleExp(1e-3, 1e-1), fNMDA=DoubleExp(10.6e-3, 285e-3), fGABA=DoubleExp(0.5e-3, 1.5e-3), fS=DoubleExp(2e-2, 1e-1),
         DATrain=lambda t: 0, DATest=lambda t: 0,
         Tff=0.3, reg=1e-2, load=[], file=None):
@@ -489,5 +489,5 @@ def run(NPre=100, NBias=100, N=30, t=10, nTrain=10, nTest=5, nEnc=10, dt=0.001,
         fig.savefig("plots/integrateNMDAbias2_testWhite%s.pdf"%test)
         plt.close('all')
 
-run(NBias=100, N=30, t=10, nTrain=5, nEnc=5, nTest=5, DATrain=lambda t: 0, DATest=lambda t: 0,
-    load=[0,1,2,3,4], file="data/integrateNMDAbias2.npz")
+run(NPre=300, NBias=100, N=30, t=10, nTrain=5, nEnc=5, nTest=5, DATrain=lambda t: 0, DATest=lambda t: 0,
+    load=[], file="data/integrateNMDAbias2.npz")
